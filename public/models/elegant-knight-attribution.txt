@@ -1,0 +1,4 @@
+Elegant Chess Knight 3D Model by LukeModels75
+https://sketchfab.com/3d-models/elegant-chess-knight-3d-model-a69dfec5b4824a76ba1eec4ba2445e25
+License: CC BY-NC 4.0 — https://creativecommons.org/licenses/by-nc/4.0/
+Adapted: transformed, normalized, surface-sampled, rendered as flat outlined metaballs.

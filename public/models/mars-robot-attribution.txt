@@ -1,0 +1,3 @@
+MARS marketing model from https://www.innate.bot/models/robot.glb
+Used in the “A color for everyone” homepage viewer.
+© Innate Inc.

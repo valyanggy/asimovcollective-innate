@@ -1,0 +1,24 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Color, OrthographicCamera, InstancedMesh } from 'three';
+import { GranularClaw, sampleGranularClaw } from '../src/lib/granular-claw';
+import { createHandSegments, distanceToHand } from '../src/lib/hand-model';
+const palette = { background: new Color('white'), foreground: new Color('black'), blue: new Color('blue'), purple: new Color('purple'), teal: new Color('cyan'), orange: new Color('orange') };
+test('granular cloud has stable samples through grasp and porous particles outside the capsule', () => {
+  const open = sampleGranularClaw(createHandSegments(0, palette), .65);
+  const segments = createHandSegments(1, palette);
+  const closed = sampleGranularClaw(segments, .65);
+  assert.ok(closed.length > 2000);
+  assert.equal(open.length, closed.length);
+  assert.ok(open.every((p, i) => Math.abs(p.scale - closed[i].scale) < 1e-10));
+  assert.ok(closed.some(p => distanceToHand(p.position, segments) > .12));
+  const camera = new OrthographicCamera(-4, 4, 3, -3, .1, 30);
+  camera.position.z = 9; camera.updateMatrixWorld();
+  const claw = new GranularClaw();
+  claw.setTreatment(35, .65); claw.update(segments, camera);
+  const mesh = claw.group.children[0] as InstancedMesh;
+  const coarse = mesh.count;
+  claw.setTreatment(220, .65); claw.update(segments, camera);
+  assert.ok(mesh.count > coarse * 2);
+  assert.ok(mesh.count < 30000);
+});

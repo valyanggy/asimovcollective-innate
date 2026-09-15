@@ -1,0 +1,8 @@
+.controls { position: absolute; z-index: 2; right: 12px; top: 10px; width: 220px; max-height: calc(100% - 20px); overflow-y: auto; background: #fff; border: 1px solid #e5e5e5; padding: 10px 12px; color: #222; font: 11px/1.5 Arial,sans-serif; }
+.controls summary { cursor: pointer; font-size: 12px; }
+.controls p { color: #888; margin: 12px 0 16px; }
+.slider { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin: 0 0 10px; font-size: 10px; }
+.slider output { font-variant-numeric: tabular-nums; }
+.slider input { grid-column: 1 / -1; width: 100%; accent-color: #222; margin: 3px 0; }
+.toggle { display: flex; gap: 6px; align-items: center; }
+.toggle input { accent-color: #222; }

@@ -1,0 +1,4 @@
+Chess Kit by Luke Brown (brownb23), CC BY 4.0.
+Source: https://sketchfab.com/3d-models/chess-kit-94f58cabfc0044acb83c28f5b70c79f9
+License: https://creativecommons.org/licenses/by/4.0/
+Adaptation: selected geometry, normalized and surface-sampled for an interactive flat metaball rendering.

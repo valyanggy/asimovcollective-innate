@@ -1,0 +1,22 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Color } from 'three';
+import { createRearGrasp } from '../src/lib/rear-grasp';
+import { createKnightPixels } from '../src/lib/knight-pixels';
+import { distanceToHand } from '../src/lib/hand-model';
+const palette={background:new Color('white'),foreground:new Color('black'),blue:new Color('blue'),purple:new Color('purple'),teal:new Color('cyan'),orange:new Color('orange')};
+test('rear jaws rotate rigidly behind the object and approach both sides',()=>{
+ const open=createRearGrasp(0,palette),closed=createRearGrasp(1,palette);
+ open.forEach((s,i)=>assert.ok(Math.abs(s.a.distanceTo(s.b)-closed[i].a.distanceTo(closed[i].b))<1e-9));
+ assert.ok(closed[5].a.z < -2);
+ assert.ok(closed[0].a.z < -1);
+ assert.ok(open[1].b.x<closed[1].b.x);
+ assert.ok(open[3].b.x>closed[3].b.x);
+ const model=createKnightPixels(true);
+ const near=(segments:ReturnType<typeof createRearGrasp>)=>model.surface.filter(s=>distanceToHand(s.position,segments)<.08);
+ const closedSamples=near(closed),openSamples=near(open);
+ assert.ok(closedSamples.length>openSamples.length);
+ assert.ok(closedSamples.some(s=>s.position.x<0));
+ assert.ok(closedSamples.some(s=>s.position.x>0));
+ model.dispose();
+});
