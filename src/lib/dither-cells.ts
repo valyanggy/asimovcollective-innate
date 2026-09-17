@@ -1,12 +1,18 @@
 export type DitherFieldSettings = {
   adhesion: number; reach: number; shadow: number; contrast: number;
   softness: number; blockSize: number; spacing: number; relief: number; lightAngle: number; rounding: number;
+  joinLobes: number; rimCount: number; rimOffset: number;
+  rimOffsetNoise: number; rimNoiseX: number; rimNoiseY: number; rimSize: number;
   showGrid: boolean; letterBlock: string; ledSize: number;
+  neckEnd: number; neckWaist: number;
 };
 export const DITHER_FIELD_DEFAULTS: DitherFieldSettings = {
   adhesion: 6, reach: 2.15, shadow: 2, contrast: .5,
   softness: .32, blockSize: 24, spacing: 24, relief: 2, lightAngle: 360, rounding: 50,
+  joinLobes: 0, rimCount: 0, rimOffset: 0,
+  rimOffsetNoise: 0, rimNoiseX: 0, rimNoiseY: 0, rimSize: 24,
   showGrid: false, letterBlock: "#0300cc", ledSize: 72,
+  neckEnd: 90, neckWaist: 6,
 };
 
 export type BuiltinCell = "solid" | "dashed" | "dashed-invert";
@@ -16,6 +22,7 @@ export type DitherStamp = {
   kind?: BuiltinCell;
   image?: CanvasImageSource;
   ramp?: ToneCell[];
+  rim?: ToneCell[];
 };
 
 export type ToneCell = { id: string; label: string; level: number; image: CanvasImageSource; joins?: boolean };
@@ -23,7 +30,7 @@ export type ToneLibrary = {
   id: string;
   folder: string;
   title: string;
-  cells: { id: string; label: string; level: number; joins?: boolean }[];
+  cells: { id: string; label: string; level: number; joins?: boolean; ext?: string }[];
 };
 export const TONAL_LIBRARY: ToneLibrary = {
   id: "tonal", folder: "tonal", title: "Tonal building blocks",
@@ -45,13 +52,37 @@ export const PUSH_LIBRARY: ToneLibrary = {
     { id: "press", label: "Press", level: 1, joins: true },
   ],
 };
+export const STEP_LIBRARY: ToneLibrary = {
+  id: "step", folder: "step", title: "Step building blocks",
+  cells: [
+    { id: "highlight", label: "Highlight", level: 0 },
+    { id: "light", label: "Light", level: .18 },
+    { id: "midtone", label: "Midtone", level: .36 },
+    { id: "shadow", label: "Shadow", level: .46, joins: true },
+    { id: "deep", label: "Deep", level: 1, joins: true },
+  ],
+};
+export const NECK_LIBRARY: ToneLibrary = {
+  id: "neck", folder: "neck", title: "Connecting blocks",
+  cells: [
+    { id: "ring", label: "Ring", level: 0, ext: "png" },
+    { id: "fill", label: "Fill", level: 1, ext: "png" },
+  ],
+};
+export const MORPH_LIBRARY: ToneLibrary = {
+  id: "morph", folder: "morph", title: "Morph building blocks",
+  cells: [
+    { id: "pale", label: "Pale", level: .28, joins: true, ext: "png" },
+    { id: "deep", label: "Deep", level: 1, joins: true, ext: "png" },
+  ],
+};
 export const DEFAULT_TONE_CELLS = TONAL_LIBRARY.cells;
 export function loadToneLibrary(library: ToneLibrary): Promise<ToneCell[]> {
   return Promise.all(library.cells.map(cell => new Promise<ToneCell>((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve({ ...cell, image });
     image.onerror = () => reject(new Error(`Could not load the ${cell.label.toLowerCase()} cell.`));
-    image.src = `/cells/${library.folder}/${cell.id}.svg`;
+    image.src = `/cells/${library.folder}/${cell.id}.${cell.ext ?? "svg"}`;
   })));
 }
 export function loadDefaultToneCells(): Promise<ToneCell[]> {
@@ -59,16 +90,63 @@ export function loadDefaultToneCells(): Promise<ToneCell[]> {
 }
 
 // Ordered dithering selects adjacent tonal cells, rather than repeating one
-// stamp at a fixed opacity. The original SVG colors and hatch marks stay intact.
-export function toneCellIndex(tone: number, column: number, row: number, levels: number[]): number {
+// stamp at a fixed opacity. Joining fills skip the dither so they stay in
+// connected bands instead of isolated corner tiles.
+export function toneCellIndex(tone: number, column: number, row: number, levels: number[], joins?: boolean[]): number {
   if (!levels.length) return -1;
   if (tone <= levels[0]) return 0;
   for (let i = 0; i < levels.length - 1; i++) {
     if (tone > levels[i + 1]) continue;
     const mix = (tone - levels[i]) / Math.max(.0001, levels[i + 1] - levels[i]);
+    if (joins?.[i] || joins?.[i + 1]) return i + Number(mix >= .5);
     return i + Number(ditherHit(mix, column, row));
   }
   return levels.length - 1;
+}
+
+/** Fill one-cell notches so a lighter joining fill welds into the darker mass. */
+export function weldJoiningIndices(indices: Int16Array, joins: boolean[], columns: number, rows: number) {
+  const lightest = joins.findIndex(Boolean);
+  if (lightest < 0) return indices;
+  const at = (column: number, row: number) => {
+    if (column < 0 || row < 0 || column >= columns || row >= rows) return -1;
+    return indices[row * columns + column];
+  };
+  const next = new Int16Array(indices);
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    const index = at(column, row);
+    if (index >= 0 && joins[index]) continue;
+    const neighbors = [at(column - 1, row), at(column + 1, row), at(column, row - 1), at(column, row + 1)]
+      .filter(item => item >= 0 && joins[item]);
+    if (neighbors.length < 2) continue;
+    const votes = new Map<number, number>();
+    for (const item of neighbors) votes.set(item, (votes.get(item) ?? 0) + 1);
+    next[row * columns + column] = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
+  }
+  indices.set(next);
+  return indices;
+}
+
+/** The lightest joining fill becomes a continuous rim so it can share the blob outline. */
+export function coatJoiningRim(indices: Int16Array, joins: boolean[], columns: number, rows: number) {
+  const lightest = joins.findIndex(Boolean);
+  if (lightest < 0 || !joins.some((join, index) => join && index !== lightest)) return indices;
+  const at = (column: number, row: number) => {
+    if (column < 0 || row < 0 || column >= columns || row >= rows) return -1;
+    return indices[row * columns + column];
+  };
+  const joining = (column: number, row: number) => {
+    const index = at(column, row);
+    return index >= 0 && joins[index];
+  };
+  const next = new Int16Array(indices);
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    if (!joining(column, row)) continue;
+    if (joining(column - 1, row) && joining(column + 1, row) && joining(column, row - 1) && joining(column, row + 1)) continue;
+    next[row * columns + column] = lightest;
+  }
+  indices.set(next);
+  return indices;
 }
 
 const INK = "#111111";
@@ -157,6 +235,7 @@ export type OccupancyLayer = {
   originY: number;
   scale?: number;
   colors?: Uint8ClampedArray;
+  combine?: "add" | "max";
 };
 
 export type FigureSample = { r: number; g: number; b: number; a: number };
@@ -175,7 +254,23 @@ export function ledHit(sample: FigureSample, column: number, row: number): boole
   return ditherHit(sample.a / 255, column, row);
 }
 
-export const FIGURE_LED_DEFAULTS: DitherFieldSettings = { ...DITHER_FIELD_DEFAULTS, showGrid: true };
+export const FIGURE_LED_DEFAULTS: DitherFieldSettings = { ...DITHER_FIELD_DEFAULTS, showGrid: true, ledSize: 16 };
+export const PUSH_MORPH_DEFAULTS: DitherFieldSettings = {
+  ...FIGURE_LED_DEFAULTS,
+  adhesion: 3.8,
+  reach: 2.8,
+  shadow: 1.65,
+  contrast: .72,
+  neckEnd: 132,
+  neckWaist: 34,
+  joinLobes: 70,
+  rimCount: 12,
+  rimOffset: 10,
+  rimOffsetNoise: 8,
+  rimNoiseX: 5,
+  rimNoiseY: 5,
+  rimSize: 24,
+};
 
 /** Diameter of a grid LED as a fraction of the cell pitch. */
 export function ledRadius(pitch: number, size = FIGURE_LED_DEFAULTS.ledSize): number {
@@ -226,21 +321,24 @@ export function drawLedOccupancy(
 }
 
 export function occupancyAt(layers: OccupancyLayer[], x: number, y: number, settings?: DitherFieldSettings): number {
-  let coverage = 0, total = 0, strongest = 0;
+  let coverage = 0, total = 0, strongest = 0, overlay = 0;
   for (const layer of layers) {
     const column = Math.round((x - layer.originX) / (layer.scale ?? 1));
     const row = Math.round((y - layer.originY) / (layer.scale ?? 1));
     if (column < 0 || row < 0 || column >= layer.width || row >= layer.height) continue;
     const density = layer.field[row * layer.width + column];
-    total += density;
-    strongest = Math.max(strongest, density);
+    if (layer.combine === "max") overlay = Math.max(overlay, density);
+    else {
+      total += density;
+      strongest = Math.max(strongest, density);
+    }
     const t = Math.max(0, Math.min(1, (density - .92) / .16));
     coverage = Math.max(coverage, t * t * (3 - 2 * t));
   }
   if (!settings) return coverage;
   // Combine RAW density before thresholding. Nearby domains now contribute
   // to the same neck; taking the maximum of separate masks cannot do this.
-  const density = strongest + (total - strongest) * settings.adhesion;
+  const density = Math.max(strongest + (total - strongest) * settings.adhesion, overlay);
   const threshold = 1 / settings.shadow;
   const halfWidth = Math.min(settings.softness, threshold * .95);
   const t = Math.max(0, Math.min(1, (density - threshold + halfWidth) / (2 * halfWidth)));
@@ -251,14 +349,15 @@ export function occupancyAt(layers: OccupancyLayer[], x: number, y: number, sett
 }
 
 export function densityAt(layers: OccupancyLayer[], x: number, y: number, adhesion: number): number {
-  let total = 0, strongest = 0;
+  let total = 0, strongest = 0, overlay = 0;
   for (const layer of layers) {
     const col = Math.round((x - layer.originX) / (layer.scale ?? 1)), row = Math.round((y - layer.originY) / (layer.scale ?? 1));
     if (col < 0 || row < 0 || col >= layer.width || row >= layer.height) continue;
     const density = layer.field[row * layer.width + col];
-    total += density; strongest = Math.max(strongest, density);
+    if (layer.combine === "max") overlay = Math.max(overlay, density);
+    else { total += density; strongest = Math.max(strongest, density); }
   }
-  return strongest + (total - strongest) * adhesion;
+  return Math.max(strongest + (total - strongest) * adhesion, overlay);
 }
 
 export function shadedToneAt(layers: OccupancyLayer[], x: number, y: number, settings: DitherFieldSettings): number {
@@ -280,6 +379,223 @@ export function shadedToneAt(layers: OccupancyLayer[], x: number, y: number, set
   const depth = 1 - Math.exp(-d * .3);
   const ink = .2 + .65 * depth + .35 * (1 - diffuse);
   return coverage * Math.max(0, Math.min(1, .5 + (ink - .5) * settings.contrast));
+}
+
+/** Blur radius used to melt stair joints, in pixels. Half a cell is the strongest it may go:
+ *  wider than that and one-cell arms wash out of the mask. */
+export function joinLobeRadius(size: number, joinLobes = 0) {
+  if (joinLobes <= 0) return 0;
+  return size * (.12 + .43 * Math.min(1, joinLobes / 100));
+}
+
+/**
+ * Trace the tile perimeter and relax only one-cell stair runs. Vertices touching
+ * a long horizontal or vertical segment are anchors, so straight walls cannot bow.
+ */
+export function smoothTileRings(
+  cells: { column: number; row: number }[],
+  stepX: number,
+  stepY: number,
+  joinRadius: number,
+): { x: number; y: number }[][] {
+  if (!cells.length || joinRadius <= 0) return [];
+  type Edge = { from: [number, number]; to: [number, number]; used: boolean };
+  const occupied = new Set(cells.map(cell => `${cell.column}:${cell.row}`));
+  const has = (column: number, row: number) => occupied.has(`${column}:${row}`);
+  const edges: Edge[] = [];
+  for (const cell of cells) {
+    const { column, row } = cell;
+    if (!has(column, row - 1)) edges.push({ from: [column, row], to: [column + 1, row], used: false });
+    if (!has(column + 1, row)) edges.push({ from: [column + 1, row], to: [column + 1, row + 1], used: false });
+    if (!has(column, row + 1)) edges.push({ from: [column + 1, row + 1], to: [column, row + 1], used: false });
+    if (!has(column - 1, row)) edges.push({ from: [column, row + 1], to: [column, row], used: false });
+  }
+  const starts = new Map<string, Edge[]>();
+  for (const edge of edges) {
+    const key = `${edge.from[0]}:${edge.from[1]}`;
+    starts.set(key, [...(starts.get(key) ?? []), edge]);
+  }
+  const direction = (edge: Edge) => edge.to[0] > edge.from[0] ? 0
+    : edge.to[1] > edge.from[1] ? 1 : edge.to[0] < edge.from[0] ? 2 : 3;
+  const rings: { x: number; y: number }[][] = [];
+  const pitch = Math.min(stepX, stepY);
+  for (const first of edges) {
+    if (first.used) continue;
+    const points: [number, number][] = [first.from];
+    let edge = first, guard = 0;
+    while (!edge.used && guard++ < edges.length + 1) {
+      edge.used = true;
+      points.push(edge.to);
+      if (edge.to[0] === first.from[0] && edge.to[1] === first.from[1]) break;
+      const candidates = (starts.get(`${edge.to[0]}:${edge.to[1]}`) ?? []).filter(candidate => !candidate.used);
+      if (!candidates.length) break;
+      const incoming = direction(edge), priority = [1, 0, 3, 2];
+      candidates.sort((a, b) =>
+        priority.indexOf((direction(a) - incoming + 4) % 4)
+        - priority.indexOf((direction(b) - incoming + 4) % 4));
+      edge = candidates[0];
+    }
+    if (points.length < 4) continue;
+    points.pop();
+    const ring = removeStraightPoints(points.map(([x, y]) => ({ x: x * stepX, y: y * stepY })));
+    rings.push(relaxStairRun(ring, pitch, joinRadius));
+  }
+  return rings;
+}
+
+function removeStraightPoints(points: { x: number; y: number }[]) {
+  return points.filter((point, index) => {
+    const before = points[(index + points.length - 1) % points.length];
+    const after = points[(index + 1) % points.length];
+    return (point.x - before.x) * (after.y - point.y)
+      !== (point.y - before.y) * (after.x - point.x);
+  });
+}
+
+function relaxStairRun(points: { x: number; y: number }[], pitch: number, limit: number) {
+  const origin = points.map(point => ({ ...point }));
+  let ring = points.map(point => ({ ...point }));
+  const short = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.hypot(a.x - b.x, a.y - b.y) <= pitch * 1.05;
+  const movable = points.map((point, index) =>
+    short(points[(index + points.length - 1) % points.length], point)
+    && short(point, points[(index + 1) % points.length]));
+  const passes = Math.max(1, Math.min(16, Math.round(limit / pitch * 24)));
+  for (let pass = 0; pass < passes; pass++) {
+    ring = ring.map((point, index) => {
+      if (!movable[index]) return point;
+      const before = ring[(index + ring.length - 1) % ring.length];
+      const after = ring[(index + 1) % ring.length];
+      let x = point.x + ((before.x + after.x) / 2 - point.x) * .45;
+      let y = point.y + ((before.y + after.y) / 2 - point.y) * .45;
+      const dx = x - origin[index].x, dy = y - origin[index].y, drift = Math.hypot(dx, dy);
+      if (drift > limit) {
+        x = origin[index].x + dx / drift * limit;
+        y = origin[index].y + dy / drift * limit;
+      }
+      return { x, y };
+    });
+  }
+  return ring;
+}
+
+/** Cells only shift on a redraw, so a settled field reuses its contour instead of retracing it. */
+function tileKey(cells: { column: number; row: number }[], stepX: number, stepY: number, joinRadius: number) {
+  let hash = cells.length;
+  for (const cell of cells) hash = (Math.imul(hash, 31) + cell.column * 7919 + cell.row) | 0;
+  return `${hash}:${cells.length}:${Math.round(stepX)}:${Math.round(stepY)}:${Math.round(joinRadius)}`;
+}
+const smoothPaths = new Map<string, Path2D>();
+
+/** The smoothed tile outline as a clip path. */
+export function smoothTilePath(
+  cells: { column: number; row: number }[],
+  stepX: number,
+  stepY: number,
+  joinRadius: number,
+): Path2D {
+  const key = tileKey(cells, stepX, stepY, joinRadius);
+  const cached = smoothPaths.get(key);
+  if (cached) return cached;
+  if (smoothPaths.size >= 8) smoothPaths.clear();
+  const path = new Path2D();
+  for (const ring of smoothTileRings(cells, stepX, stepY, joinRadius)) {
+    if (ring.length < 3) continue;
+    const corners = ring.map((point, index) => {
+      const before = ring[(index + ring.length - 1) % ring.length];
+      const after = ring[(index + 1) % ring.length];
+      const beforeLength = Math.hypot(before.x - point.x, before.y - point.y);
+      const afterLength = Math.hypot(after.x - point.x, after.y - point.y);
+      const radius = Math.min(joinRadius * .45, beforeLength * .3, afterLength * .3);
+      return {
+        point,
+        before: { x: point.x + (before.x - point.x) / beforeLength * radius, y: point.y + (before.y - point.y) / beforeLength * radius },
+        after: { x: point.x + (after.x - point.x) / afterLength * radius, y: point.y + (after.y - point.y) / afterLength * radius },
+      };
+    });
+    path.moveTo(corners[0].after.x, corners[0].after.y);
+    for (let index = 1; index < corners.length; index++) {
+      const corner = corners[index];
+      path.lineTo(corner.before.x, corner.before.y);
+      path.quadraticCurveTo(corner.point.x, corner.point.y, corner.after.x, corner.after.y);
+    }
+    path.lineTo(corners[0].before.x, corners[0].before.y);
+    path.quadraticCurveTo(corners[0].point.x, corners[0].point.y, corners[0].after.x, corners[0].after.y);
+    path.closePath();
+  }
+  smoothPaths.set(key, path);
+  return path;
+}
+
+type ConnectedLayer = { canvas: HTMLCanvasElement; x: number; y: number; width: number; height: number };
+const connectedLayers = new WeakMap<CanvasImageSource, Map<string, ConnectedLayer>>();
+
+/** Ported from the Toggle Dither Connect mode: grow circles modestly, blur, then threshold. */
+export function connectGeometry(size: number, amount: number) {
+  const mix = Math.max(0, Math.min(1, amount / 100));
+  return {
+    radius: size * (.5 + (.78 - .5) * mix),
+    blur: 1 + size * .4 * mix,
+  };
+}
+
+function connectedTileLayer(
+  tiles: JoinedTile[],
+  image: CanvasImageSource,
+  size: number,
+  amount: number,
+): ConnectedLayer | null {
+  if (typeof document === "undefined" || !tiles.length) return null;
+  let cache = connectedLayers.get(image);
+  if (!cache) { cache = new Map(); connectedLayers.set(image, cache); }
+  const scale = Math.min(2, window.devicePixelRatio || 1);
+  const key = `${tileKey(tiles, size, size, amount)}:${scale}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  if (cache.size >= 8) cache.clear();
+
+  const geometry = connectGeometry(size, amount);
+  const pad = Math.ceil(geometry.radius + geometry.blur * 3 + 2);
+  const x = Math.floor(Math.min(...tiles.map(tile => tile.x)) - pad);
+  const y = Math.floor(Math.min(...tiles.map(tile => tile.y)) - pad);
+  const right = Math.ceil(Math.max(...tiles.map(tile => tile.x)) + pad);
+  const bottom = Math.ceil(Math.max(...tiles.map(tile => tile.y)) + pad);
+  const width = right - x, height = bottom - y;
+  const raw = document.createElement("canvas");
+  raw.width = Math.max(1, Math.ceil(width * scale));
+  raw.height = Math.max(1, Math.ceil(height * scale));
+  const rawContext = raw.getContext("2d");
+  if (!rawContext) return null;
+  rawContext.setTransform(scale, 0, 0, scale, 0, 0);
+  rawContext.fillStyle = "#000";
+  for (const tile of tiles) {
+    rawContext.beginPath();
+    rawContext.arc(tile.x - x, tile.y - y, geometry.radius, 0, Math.PI * 2);
+    rawContext.fill();
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = raw.width;
+  canvas.height = raw.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  context.filter = `blur(${Math.max(.5, geometry.blur * scale)}px)`;
+  context.drawImage(raw, 0, 0);
+  context.filter = "none";
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 3; index < pixels.data.length; index += 4) {
+    pixels.data[index] = pixels.data[index] >= 128 ? 255 : 0;
+  }
+  context.putImageData(pixels, 0, 0);
+  context.globalCompositeOperation = "source-in";
+  const pattern = context.createPattern(image, "repeat");
+  context.fillStyle = pattern ?? "#000";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = "source-over";
+
+  const layer = { canvas, x, y, width, height };
+  cache.set(key, layer);
+  return layer;
 }
 
 /** Bits are TL, TR, BR, BL. Connected faces stay square to prevent seams. */
@@ -309,12 +625,28 @@ function roundedTile(image: CanvasImageSource, size: number, rounding: number, m
   return tile;
 }
 
-type JoinedTile = { column: number; row: number; x: number; y: number; image: CanvasImageSource };
+type JoinedTile = { column: number; row: number; x: number; y: number; image: CanvasImageSource; tone: string; level: number };
 type GridEdge = { from: [number,number]; to: [number,number]; used: boolean };
 
+/** Round outer convex corners, and same-tone notches. Meetings between two joining fills stay square. */
+export function outerCornerRadius(column: number, row: number, solid: Set<string>, radius: number, mine?: Set<string>) {
+  const keys = [`${column - 1}:${row - 1}`, `${column}:${row - 1}`, `${column - 1}:${row}`, `${column}:${row}`];
+  const filled = keys.filter(key => solid.has(key));
+  if (filled.length === 1) return radius;
+  if (filled.length === 3 && (!mine || filled.every(key => mine.has(key)))) return radius;
+  return 0;
+}
+
 /** Trace the exact grid perimeter and round its corners with vector curves. */
-export function roundedGridUnionPath(cells:{column:number;row:number}[],stepX:number,stepY:number,radius:number):Path2D{
+export function roundedGridUnionPath(
+  cells: { column: number; row: number }[],
+  stepX: number,
+  stepY: number,
+  radius: number,
+  solidCells?: { column: number; row: number }[],
+): Path2D {
   const occupied=new Set(cells.map(cell=>`${cell.column}:${cell.row}`)),edges:GridEdge[]=[];
+  const solid=new Set((solidCells??cells).map(cell=>`${cell.column}:${cell.row}`));
   const has=(column:number,row:number)=>occupied.has(`${column}:${row}`);
   for(const {column,row} of cells){
     if(!has(column,row-1))edges.push({from:[column,row],to:[column+1,row],used:false});
@@ -340,11 +672,11 @@ export function roundedGridUnionPath(cells:{column:number;row:number}[],stepX:nu
     }
     if(points.length<4)continue;
     points.pop();
-    const scaled=points.map(([x,y])=>({x:x*stepX,y:y*stepY}));
+    const scaled=points.map(([x,y])=>({x:x*stepX,y:y*stepY,column:x,row:y}));
     const rounded=scaled.map((point,index)=>{
       const previous=scaled[(index+scaled.length-1)%scaled.length],next=scaled[(index+1)%scaled.length];
       const beforeLength=Math.hypot(previous.x-point.x,previous.y-point.y),afterLength=Math.hypot(next.x-point.x,next.y-point.y);
-      const r=Math.min(radius,beforeLength*.49,afterLength*.49);
+      const r=Math.min(outerCornerRadius(point.column,point.row,solid,radius,occupied),beforeLength*.49,afterLength*.49);
       return {
         point,
         before:{x:point.x+(previous.x-point.x)/beforeLength*r,y:point.y+(previous.y-point.y)/beforeLength*r},
@@ -367,18 +699,163 @@ function drawJoinedTiles(
   stepY: number,
   size: number,
   rounding: number,
+  joinLobes = 0,
 ) {
   if (!tiles.length) return;
+  const groups = new Map<string, JoinedTile[]>();
+  for (const tile of tiles) {
+    const group = groups.get(tile.tone);
+    if (group) group.push(tile);
+    else groups.set(tile.tone, [tile]);
+  }
+  const ordered = [...groups.values()].sort((a, b) => a[0].level - b[0].level);
+  if (ordered.length > 1) {
+    const pale = ordered[0][0].image;
+    drawJoinedTone(context, tiles.map(tile => ({ ...tile, image: pale })), tiles, stepX, stepY, size, rounding, joinLobes);
+    for (const group of ordered.slice(1)) drawJoinedTone(context, group, group, stepX, stepY, size, rounding, joinLobes);
+    return;
+  }
+  for (const group of ordered) drawJoinedTone(context, group, tiles, stepX, stepY, size, rounding, joinLobes);
+}
+
+function drawJoinedTone(
+  context: CanvasRenderingContext2D,
+  tiles: JoinedTile[],
+  solid: JoinedTile[],
+  stepX: number,
+  stepY: number,
+  size: number,
+  rounding: number,
+  joinLobes = 0,
+) {
   const half = size / 2;
+  const radius = size * Math.min(.5, rounding / 100);
+  const joinRadius = joinLobeRadius(size, joinLobes);
+  const onGrid = Math.abs(size - stepX) < .5 && Math.abs(size - stepY) < .5;
   context.save();
-  if(Math.abs(size-stepX)<.5&&Math.abs(size-stepY)<.5){
-    context.clip(roundedGridUnionPath(tiles,stepX,stepY,size*Math.min(.5,rounding/100)),'nonzero');
-    for(const tile of tiles)context.drawImage(tile.image,tile.x-half,tile.y-half,size,size);
-  }else{
-    const ratio=Math.max(1,Math.abs(context.getTransform().a));
-    for(const tile of tiles){const image=roundedTile(tile.image,size,rounding,15,ratio);context.drawImage(image,tile.x-half,tile.y-half,size,size);}
+  if (onGrid && joinLobes > 0) {
+    const layer = connectedTileLayer(tiles, tiles[0].image, size, joinLobes);
+    if (layer) {
+      context.drawImage(layer.canvas, layer.x, layer.y, layer.width, layer.height);
+      context.restore();
+      return;
+    }
+  }
+  if (onGrid && joinRadius > 0) {
+    context.clip(smoothTilePath(tiles, stepX, stepY, joinRadius), "nonzero");
+  } else if (onGrid) context.clip(roundedGridUnionPath(tiles, stepX, stepY, radius, solid), "nonzero");
+  if (onGrid) {
+    for (const tile of tiles) context.drawImage(tile.image, tile.x - half, tile.y - half, size, size);
+  } else {
+    const ratio = Math.max(1, Math.abs(context.getTransform().a));
+    for (const tile of tiles) {
+      const image = roundedTile(tile.image, size, rounding, 15, ratio);
+      context.drawImage(image, tile.x - half, tile.y - half, size, size);
+    }
   }
   context.restore();
+}
+
+export type RimCell = { column: number; row: number };
+
+/** Occupied cells that touch empty space form the visible rim of the domain. */
+export function rimCandidateCells(indices: Int16Array, columns: number, rows: number): RimCell[] {
+  const occupied = (column: number, row: number) =>
+    column >= 0 && row >= 0 && column < columns && row < rows && indices[row * columns + column] >= 0;
+  const candidates: RimCell[] = [];
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    if (!occupied(column, row)) continue;
+    if (!occupied(column - 1, row) || !occupied(column + 1, row)
+      || !occupied(column, row - 1) || !occupied(column, row + 1)) {
+      candidates.push({ column, row });
+    }
+  }
+  return candidates;
+}
+
+function rimHash(cell: RimCell, salt = 0) {
+  let value = Math.imul(cell.column + 0x6d2b79f5 + salt, cell.row + 0x1b873593 - salt);
+  value = Math.imul(value ^ (value >>> 15), value | 1);
+  return (value ^ (value >>> 14)) >>> 0;
+}
+
+/** Stable signed random value for one rim cell; amount is its maximum displacement. */
+export function rimJitter(cell: RimCell, amount: number, salt: number) {
+  return (rimHash(cell, salt) / 4294967295 * 2 - 1) * Math.max(0, amount);
+}
+
+/** Deterministic randomness avoids flicker; spacing passes prevent accidental clumps. */
+export function selectRimCells(candidates: RimCell[], count: number): RimCell[] {
+  const target = Math.max(0, Math.min(Math.round(count), candidates.length));
+  if (!target) return [];
+  const ordered = [...candidates].sort((a, b) => rimHash(a) - rimHash(b));
+  const selected: RimCell[] = [];
+  const used = new Set<string>();
+  for (const spacing of [4, 3, 2, 1, 0]) {
+    for (const cell of ordered) {
+      if (selected.length >= target) return selected;
+      const key = `${cell.column}:${cell.row}`;
+      if (used.has(key)) continue;
+      if (spacing && selected.some(chosen =>
+        Math.hypot(chosen.column - cell.column, chosen.row - cell.row) < spacing)) continue;
+      selected.push(cell);
+      used.add(key);
+    }
+  }
+  return selected;
+}
+
+/** Unit vector from an occupied rim cell toward its neighboring empty space. */
+export function rimOutwardVector(indices: Int16Array, columns: number, rows: number, cell: RimCell) {
+  const occupied = (column: number, row: number) =>
+    column >= 0 && row >= 0 && column < columns && row < rows && indices[row * columns + column] >= 0;
+  const directions = [
+    { column: -1, row: 0 }, { column: 1, row: 0 },
+    { column: 0, row: -1 }, { column: 0, row: 1 },
+  ];
+  let x = 0, y = 0;
+  for (const direction of directions) {
+    if (occupied(cell.column + direction.column, cell.row + direction.row)) continue;
+    x += direction.column;
+    y += direction.row;
+  }
+  const length = Math.hypot(x, y);
+  if (length) return { x: x / length, y: y / length };
+  return { x: 0, y: 0 };
+}
+
+function drawRimBlocks(
+  context: CanvasRenderingContext2D,
+  indices: Int16Array,
+  columns: number,
+  rows: number,
+  stepX: number,
+  stepY: number,
+  size: number,
+  blocks: ToneCell[],
+  count: number,
+  offset: number,
+  offsetNoise: number,
+  noiseX: number,
+  noiseY: number,
+  blockSize: number,
+) {
+  if (!blocks.length || count <= 0) {
+    context.canvas.dataset.rimBlocks = "0";
+    return;
+  }
+  const selected = selectRimCells(rimCandidateCells(indices, columns, rows), count);
+  const drawSize = Math.max(1, blockSize || size);
+  const half = drawSize / 2;
+  for (const cell of selected) {
+    const image = blocks[rimHash(cell) % blocks.length].image;
+    const outward = rimOutwardVector(indices, columns, rows, cell);
+    const distance = offset + rimJitter(cell, offsetNoise, 17);
+    const x = (cell.column + .5) * stepX + outward.x * distance + rimJitter(cell, noiseX, 31);
+    const y = (cell.row + .5) * stepY + outward.y * distance + rimJitter(cell, noiseY, 47);
+    context.drawImage(image, x - half, y - half, drawSize, drawSize);
+  }
+  context.canvas.dataset.rimBlocks = String(selected.length);
 }
 
 export function drawDitheredOccupancy(
@@ -402,8 +879,11 @@ export function drawDitheredOccupancy(
       // Highlights belong to the fringe of a domain, never to empty canvas.
       const fringe = Math.max(0, Math.min(1, (density - .055) / .20));
       if (!ditherHit(fringe * fringe * (3 - 2 * fringe), col, row)) continue;
-      indices[row * columns + col] = toneCellIndex(shadedToneAt(layers, x, y, settings), col, row, levels);
+      indices[row * columns + col] = toneCellIndex(
+        shadedToneAt(layers, x, y, settings), col, row, levels, stamp.ramp!.map(cell => Boolean(cell.joins)),
+      );
     }
+    weldJoiningIndices(indices, stamp.ramp!.map(cell => Boolean(cell.joins)), columns, rows);
   }
   const ratio = Math.max(1, Math.abs(context.getTransform().a));
   const joined: JoinedTile[] = [];
@@ -411,10 +891,10 @@ export function drawDitheredOccupancy(
     for (let row=0;row<rows;row++) for (let column=0;column<columns;column++) {
       const index=indices[row*columns+column];
       if (index<0 || !stamp.ramp[index].joins) continue;
-      joined.push({column,row,x:(column+.5)*stepX,y:(row+.5)*stepY,image:stamp.ramp[index].image});
+      joined.push({column,row,x:(column+.5)*stepX,y:(row+.5)*stepY,image:stamp.ramp[index].image,tone:stamp.ramp[index].id,level:stamp.ramp[index].level});
       counts![index]++;
     }
-    drawJoinedTiles(context,joined,stepX,stepY,radius*2,settings.rounding);
+    drawJoinedTiles(context,joined,stepX,stepY,radius*2,settings.rounding,settings.joinLobes ?? 0);
   }
   for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
     const x = (column + .5) * stepX, y = (row + .5) * stepY;
@@ -430,6 +910,11 @@ export function drawDitheredOccupancy(
     }
     if (!ditherHit(occupancyAt(layers, x, y, settings), column, row)) continue;
     drawStamp(context, stamp, x, y, radius);
+  }
+  if (indices && settings) {
+    drawRimBlocks(context, indices, columns, rows, stepX, stepY, radius * 2, stamp.rim ?? [],
+      settings.rimCount ?? 0, settings.rimOffset ?? 0, settings.rimOffsetNoise ?? 0,
+      settings.rimNoiseX ?? 0, settings.rimNoiseY ?? 0, settings.rimSize ?? radius * 2);
   }
   if (counts) context.canvas.dataset.toneCounts = JSON.stringify(counts);
 }
@@ -474,6 +959,188 @@ export function figureDensity(image: CanvasImageSource, width: number, height: n
   const layer = { field, width: fieldWidth, height: fieldHeight, originX, originY, scale, colors };
   figureCache.set(image, { key, layer });
   return layer;
+}
+
+const EMPTY_OCCUPANCY: OccupancyLayer = { field: new Float32Array(0), width: 0, height: 0, originX: 0, originY: 0 };
+export function emptyOccupancy(): OccupancyLayer {
+  return EMPTY_OCCUPANCY;
+}
+
+export function overlayLayout(sourceWidth: number, sourceHeight: number, width: number, height: number) {
+  const maxWidth = width * .158, maxHeight = height * .476;
+  const aspect = sourceWidth / Math.max(1, sourceHeight);
+  let drawWidth = maxWidth, drawHeight = maxWidth / aspect;
+  if (drawHeight > maxHeight) { drawHeight = maxHeight; drawWidth = maxHeight * aspect; }
+  return { x: (width - drawWidth) / 2, y: (height - drawHeight) / 2, width: drawWidth, height: drawHeight };
+}
+
+export function isOverlayPaper(r: number, g: number, b: number): boolean {
+  return r >= 248 && g >= 248 && b >= 248;
+}
+
+export function isOverlayBackdrop(r: number, g: number, b: number, a: number): boolean {
+  if (a < 8) return true;
+  if (isOverlayPaper(r, g, b)) return false;
+  const spread = Math.max(r, g, b) - Math.min(r, g, b);
+  return spread <= 14 && Math.min(r, g, b) >= 170;
+}
+
+/** Clear the white page from the edges so floating step chrome stays intact. */
+export function punchOverlayPaper(data: Uint8ClampedArray, width: number, height: number) {
+  const seen = new Uint8Array(width * height);
+  const stack: number[] = [];
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    stack.push(y * width + x);
+  };
+  for (let x = 0; x < width; x++) { push(x, 0); push(x, height - 1); }
+  for (let y = 0; y < height; y++) { push(0, y); push(width - 1, y); }
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (seen[id]) continue;
+    seen[id] = 1;
+    const index = id * 4;
+    if (data[index + 3] < 8 || !isOverlayPaper(data[index], data[index + 1], data[index + 2])) continue;
+    data[index + 3] = 0;
+    const x = id % width, y = (id - x) / width;
+    push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+  }
+}
+
+/** Clear the page gray from the edges so the white chat card stays intact. */
+export function punchOverlayBackdrop(data: Uint8ClampedArray, width: number, height: number) {
+  const seen = new Uint8Array(width * height);
+  const stack: number[] = [];
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    stack.push(y * width + x);
+  };
+  for (let x = 0; x < width; x++) { push(x, 0); push(x, height - 1); }
+  for (let y = 0; y < height; y++) { push(0, y); push(width - 1, y); }
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (seen[id]) continue;
+    seen[id] = 1;
+    const index = id * 4;
+    if (!isOverlayBackdrop(data[index], data[index + 1], data[index + 2], data[index + 3])) continue;
+    data[index + 3] = 0;
+    const x = id % width, y = (id - x) / width;
+    push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+  }
+}
+
+function keepLargestOverlayBlobs(data: Uint8ClampedArray, width: number, height: number, keep = 2) {
+  const seen = new Uint8Array(width * height);
+  const blobs: number[][] = [];
+  for (let id = 0; id < seen.length; id++) {
+    if (seen[id] || data[id * 4 + 3] < 8) continue;
+    const stack = [id], blob = [id];
+    seen[id] = 1;
+    while (stack.length) {
+      const current = stack.pop()!;
+      const x = current % width, y = (current - x) / width;
+      for (const next of [current + 1, current - 1, current + width, current - width]) {
+        if (next < 0 || next >= seen.length || seen[next] || data[next * 4 + 3] < 8) continue;
+        const nx = next % width;
+        if (Math.abs(nx - x) + Math.abs(((next - nx) / width) - y) !== 1) continue;
+        seen[next] = 1;
+        stack.push(next);
+        blob.push(next);
+      }
+    }
+    blobs.push(blob);
+  }
+  blobs.sort((a, b) => b.length - a.length);
+  for (const blob of blobs.slice(keep)) for (const id of blob) data[id * 4 + 3] = 0;
+}
+
+function trimOverlayCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  const context = source.getContext("2d");
+  if (!context) return source;
+  const pixels = context.getImageData(0, 0, source.width, source.height);
+  let left = source.width, top = source.height, right = 0, bottom = 0;
+  for (let y = 0; y < source.height; y++) for (let x = 0; x < source.width; x++) {
+    if (pixels.data[(y * source.width + x) * 4 + 3] < 8) continue;
+    left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y);
+  }
+  if (right <= left || bottom <= top) return source;
+  const pad = 2;
+  left = Math.max(0, left - pad); top = Math.max(0, top - pad);
+  right = Math.min(source.width - 1, right + pad); bottom = Math.min(source.height - 1, bottom + pad);
+  const canvas = document.createElement("canvas");
+  canvas.width = right - left + 1;
+  canvas.height = bottom - top + 1;
+  canvas.getContext("2d")?.drawImage(source, left, top, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+const overlayCache = new WeakMap<CanvasImageSource, HTMLCanvasElement>();
+const paperOverlayCache = new WeakMap<CanvasImageSource, HTMLCanvasElement>();
+function punchedOverlay(image: CanvasImageSource, paper = false): HTMLCanvasElement {
+  const cache = paper ? paperOverlayCache : overlayCache;
+  const cached = cache.get(image);
+  if (cached) return cached;
+  const width = ("naturalWidth" in image && image.naturalWidth) || (image as { width: number }).width || 1;
+  const height = ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 1;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, width, height);
+    if (paper) punchOverlayPaper(pixels.data, width, height);
+    else {
+      punchOverlayBackdrop(pixels.data, width, height);
+      keepLargestOverlayBlobs(pixels.data, width, height);
+    }
+    context.putImageData(pixels, 0, 0);
+  }
+  const trimmed = trimOverlayCanvas(canvas);
+  cache.set(image, trimmed);
+  return trimmed;
+}
+
+export function paperOverlay(image: CanvasImageSource) {
+  return punchedOverlay(image, true);
+}
+
+export function overlayPlacement(image: CanvasImageSource, width: number, height: number) {
+  const punched = punchedOverlay(image);
+  return { punched, ...overlayLayout(punched.width, punched.height, width, height) };
+}
+
+export function overlayDensityBox(image: CanvasImageSource, width: number, height: number) {
+  const box = overlayPlacement(image, width, height);
+  const padX = box.width * .12, padY = box.height * .12;
+  return {
+    left: box.x - padX,
+    top: box.y - padY,
+    right: box.x + box.width + padX,
+    bottom: box.y + box.height + padY,
+  };
+}
+
+export function drawCenteredOverlay(context: CanvasRenderingContext2D, image: CanvasImageSource, width: number, height: number, appear = 1) {
+  if (appear <= 0) return;
+  const ease = appear * appear * (3 - 2 * appear);
+  const box = overlayPlacement(image, width, height);
+  context.save();
+  context.globalAlpha = ease;
+  context.translate(box.x + box.width / 2, box.y + box.height / 2 + (1 - ease) * 10);
+  context.scale(.94 + .06 * ease, .94 + .06 * ease);
+  context.drawImage(box.punched, -box.width / 2, -box.height / 2, box.width, box.height);
+  context.restore();
+}
+
+/** Full-bleed color tiles (Deep, Press) join into rounded squares. Circular stamps do not. */
+export function imageFillsSquare(data: Uint8ClampedArray, width: number, height: number): boolean {
+  const paper = (r: number, g: number, b: number, a: number) => a < 32 || (r >= 248 && g >= 248 && b >= 248);
+  let covered = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (!paper(data[i], data[i + 1], data[i + 2], data[i + 3])) covered++;
+  }
+  return covered / Math.max(1, width * height) >= .88;
 }
 
 export function loadStampFile(file: File): Promise<{ image: HTMLImageElement; url: string }> {

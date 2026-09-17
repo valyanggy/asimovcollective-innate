@@ -1,8 +1,8 @@
 .workspace { --muted: #858785; --foreground: #171918; --focus: #525653; color-scheme: light; min-height: 100svh; background: #fff; color: #171918; padding: 22px 3.4vw 30px; }
 .header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px; }
 .navigation { flex-wrap: wrap; }
-.navigation a { min-height: 40px; }
-.navigation a:hover { color: #171918; }
+.navigation a, .navigation :global(.study-archive-label) { min-height: 40px; }
+.navigation a:hover, .navigation :global(.study-archive-label):hover { color: #171918; }
 .title { font-weight: 400; font-size: .875rem; letter-spacing: 0; }
 .patterns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(32px, 4.7vw, 80px); max-width: 1680px; margin: 50px auto 52px; }
 .canvas { display: block; width: 100%; height: auto; aspect-ratio: 1; }

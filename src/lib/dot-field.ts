@@ -3,7 +3,10 @@ import { drawDomainTrails, type TrailSettings } from "./domain-trails";
 import { drawThinkingArcs } from "./thinking-arcs";
 import { drawComponentLinkage, type LinkageSettings } from "./component-linkage";
 import { fitTerritoryEllipse, type TerritoryEllipse, orderTerritory, territoryCoverage } from "./agent-territory";
-import { drawDitheredOccupancy, drawLedOccupancy, figureDensity, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
+import { drawCenteredOverlay, drawDitheredOccupancy, drawLedOccupancy, emptyOccupancy, overlayDensityBox, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
+import { connectIslands, morphIslands } from "./bridge-density";
+import { chatAppear, drawStepOverlays, visibleStepLinks, stepSequenceElapsed, STEP_SCALE, type StepOverlaySpec } from "./step-overlays";
+import { cellBounds, drawGridCells, placeGridCells } from "./grid-cells";
 
 export type Dot = { territory?: number; x: number; y: number; radius: number; cyclePhase: number; cycleSpeed: number; blurAmount: number };
 type BlurredDot = { x: number; y: number; core: number; spread: number; opacity: number };
@@ -40,10 +43,11 @@ const smoothstep = (start: number, end: number, value: number) => {
   return t * t * (3 - 2 * t);
 };
 
-function gridMetrics(width: number, height: number) {
-  const targetStep = width < 620 ? 13 : width < 1050 ? 16 : 19;
-  const columns = Math.max(24, Math.floor(width / targetStep));
-  const rows = Math.max(24, Math.floor(height / targetStep));
+export function gridMetrics(width: number, height: number, scale = 1) {
+  const targetStep = (width < 620 ? 13 : width < 1050 ? 16 : 19) * scale;
+  const minAxis = Math.max(8, Math.round(24 / scale));
+  const columns = Math.max(minAxis, Math.floor(width / targetStep));
+  const rows = Math.max(minAxis, Math.floor(height / targetStep));
   return { columns, rows, stepX: width / columns, stepY: height / rows };
 }
 
@@ -848,7 +852,7 @@ function blurRingBackdrop(canvas: HTMLCanvasElement, width: number, height: numb
   return backdrop;
 }
 
-export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, headlinePosition?: Point | null, rectangular = false, objectPositions?: (Point | null)[], linkage?: LinkageSettings, dither?: DitherStamp, ditherSettings: DitherFieldSettings = DITHER_FIELD_DEFAULTS, trails?: TrailSettings, figure?: CanvasImageSource): DotFieldLayout | undefined {
+export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, headlinePosition?: Point | null, rectangular = false, objectPositions?: (Point | null)[], linkage?: LinkageSettings, dither?: DitherStamp, ditherSettings: DitherFieldSettings = DITHER_FIELD_DEFAULTS, trails?: TrailSettings, figure?: CanvasImageSource, steps?: StepOverlaySpec[], stepDither?: DitherStamp, neckDither?: DitherStamp, figureMorph = false, gridOnly = false): DotFieldLayout | undefined {
   const bounds = canvas.getBoundingClientRect();
   if (!bounds.width || !bounds.height) return;
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -860,9 +864,62 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, bounds.width, bounds.height);
+  if (gridOnly) {
+    const { columns, rows, stepX, stepY } = gridMetrics(bounds.width, bounds.height, 1.5);
+    drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
+    const active = Number(canvas.dataset.activeCell ?? -1);
+    const live = canvas.dataset.draggingCell === "1" && Number.isFinite(active) ? active : -1;
+    const cells = placeGridCells(bounds.width, bounds.height, objectPositions ?? [], { columns, rows, stepX, stepY }, live);
+    drawGridCells(context, cells, Number.isFinite(active) ? active : -1);
+    const objects = cells.map(cell => ({ bounds: cellBounds(cell), anchor: { x: cell.x, y: cell.y } }));
+    return { objects, headlineBounds: objects[0]?.bounds ?? { left: -1, top: -1, right: -1, bottom: -1 }, headlineAnchor: objects[0]?.anchor ?? { x: 0, y: 0 } };
+  }
   if (dither && figure) {
     const { columns, rows, stepX, stepY } = gridMetrics(bounds.width, bounds.height);
-    drawLedOccupancy(context, figureDensity(figure, bounds.width, bounds.height), columns, rows, stepX, stepY, ditherSettings);
+    drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
+    const elapsed = stepSequenceElapsed(canvas, time);
+    const chat = time === 0 ? 1 : chatAppear(elapsed);
+    if (dither.ramp?.length) {
+      const centerBox = overlayDensityBox(figure, bounds.width, bounds.height);
+      const stepLinks = visibleStepLinks(steps ?? [], bounds.width, bounds.height, elapsed, time === 0);
+      const dots = createDotField(seed, bounds.width, bounds.height);
+      const merge = multiAgentAppearance.mergeScale * ditherSettings.reach;
+      const spacing = ditherSettings.spacing;
+      const stampColumns = Math.ceil(bounds.width / spacing);
+      const stampRows = Math.ceil(bounds.height / spacing);
+      const centerLayer = chat > 0
+        ? ditherDensity(canvas, 0, [centerBox], { x: centerBox.left, y: centerBox.top }, dots, time, merge, spacing)
+        : null;
+      const stepLayers = stepLinks.map((link, slot) => ditherDensity(canvas, slot + 1, [link.box], { x: link.box.left, y: link.box.top }, dots, time,
+        merge * STEP_SCALE, spacing));
+      if (figureMorph) {
+        const morphLayers = chat > 0 ? stepLinks.flatMap(link => {
+          const bridge = morphIslands(centerBox, link.box, link.progress, spacing, time,
+            { end: ditherSettings.neckEnd, waist: ditherSettings.neckWaist });
+          return bridge ? [bridge] : [];
+        }) : [];
+        const sharedLayers = [...(centerLayer ? [centerLayer] : []), ...stepLayers, ...morphLayers];
+        if (sharedLayers.length) drawDitheredOccupancy(context, sharedLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        canvas.dataset.morphLinks = String(morphLayers.length);
+      } else {
+        delete canvas.dataset.morphLinks;
+        if (centerLayer) drawDitheredOccupancy(context, [centerLayer], stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        if (stepLayers.length && stepDither?.ramp?.length) {
+          drawDitheredOccupancy(context, stepLayers, stampColumns, stampRows, spacing, spacing, stepDither, ditherSettings);
+        }
+        const neckLayers = chat > 0 ? stepLinks.flatMap((link) => {
+          const bridge = connectIslands(centerBox, link.box, link.progress, spacing, time,
+            { end: ditherSettings.neckEnd, waist: ditherSettings.neckWaist });
+          return bridge ? [bridge] : [];
+        }) : [];
+        if (neckLayers.length && neckDither?.ramp?.length) {
+          drawDitheredOccupancy(context, neckLayers, stampColumns, stampRows, spacing, spacing, neckDither,
+            { ...ditherSettings, adhesion: 0 });
+        }
+      }
+    }
+    drawCenteredOverlay(context, figure, bounds.width, bounds.height, chat);
+    if (steps?.length) drawStepOverlays(context, steps, bounds.width, bounds.height, elapsed, time === 0);
     return { headlineBounds: { left: -1, top: -1, right: -1, bottom: -1 }, headlineAnchor: { x: 0, y: 0 } };
   }
   if (rectangular) {

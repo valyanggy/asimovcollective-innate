@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BAYER_8, ditherHit, figureInkDensity, loadStampFile, occupancyAt } from "../src/lib/dither-cells";
+import { BAYER_8, ditherHit, figureInkDensity, imageFillsSquare, loadStampFile, occupancyAt } from "../src/lib/dither-cells";
 
 test("full occupancy stamps every Bayer cell and empty occupancy stamps none", () => {
   for (let row = 0; row < 8; row++) for (let column = 0; column < 8; column++) {
@@ -30,10 +30,124 @@ test("figure ink is empty for transparent pixels and heavier for dark ink than p
 });
 
 test("LED radius follows the circle-size percent of the grid pitch", async () => {
-  const { ledRadius } = await import("../src/lib/dither-cells");
+  const { ledRadius, FIGURE_LED_DEFAULTS } = await import("../src/lib/dither-cells");
+  assert.equal(FIGURE_LED_DEFAULTS.ledSize, 16);
   assert.ok(Math.abs(ledRadius(20, 72) - 7.2) < 1e-10);
   assert.equal(ledRadius(20, 100), 10);
   assert.equal(ledRadius(20, 0), 0.8);
+});
+
+test("overlay punch clears page gray and keeps the white card", async () => {
+  const { isOverlayPaper, punchOverlayBackdrop } = await import("../src/lib/dither-cells");
+  assert.equal(isOverlayPaper(255, 255, 255), true);
+  assert.equal(isOverlayPaper(230, 230, 230), false);
+  const width = 5, height = 5;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < data.length; index += 4) {
+    data[index] = data[index + 1] = data[index + 2] = 230;
+    data[index + 3] = 255;
+  }
+  for (let y = 1; y <= 3; y++) for (let x = 1; x <= 3; x++) {
+    const index = (y * width + x) * 4;
+    data[index] = data[index + 1] = data[index + 2] = 255;
+  }
+  punchOverlayBackdrop(data, width, height);
+  assert.equal(data[3], 0);
+  assert.equal(data[(2 * width + 2) * 4 + 3], 255);
+  assert.equal(data[(2 * width + 2) * 4], 255);
+});
+
+test("overlay image stays centered and inside the field", async () => {
+  const { overlayLayout } = await import("../src/lib/dither-cells");
+  const box = overlayLayout(886, 874, 1200, 800);
+  assert.ok(Math.abs(box.x + box.width / 2 - 600) < .01);
+  assert.ok(Math.abs(box.y + box.height / 2 - 400) < .01);
+  assert.ok(box.width <= 1200 * .308 + .01);
+  assert.ok(box.height <= 800 * .476 + .01);
+});
+
+test("replaying the step sequence restarts elapsed time", async () => {
+  const { stepSequenceElapsed, replayStepSequence } = await import("../src/lib/step-overlays");
+  const token = {};
+  assert.equal(stepSequenceElapsed(token, 100), 0);
+  assert.equal(stepSequenceElapsed(token, 2100), 2000);
+  replayStepSequence(token);
+  assert.equal(stepSequenceElapsed(token, 2200), 0);
+  assert.equal(stepSequenceElapsed(token, 0), 1e9);
+});
+
+test("step overlays appear in order and sit on their frame anchors", async () => {
+  const { chatAppear, stepAppear, placedOverlayLayout, STEP_OVERLAYS } = await import("../src/lib/step-overlays");
+  assert.equal(chatAppear(0), 0);
+  assert.equal(chatAppear(2999), 0);
+  assert.equal(chatAppear(3070), 1);
+  assert.equal(stepAppear(0, 0), 0);
+  assert.equal(stepAppear(4999, 0), 0);
+  assert.equal(stepAppear(5070, 0), 1);
+  assert.equal(stepAppear(7100, 1), 0);
+  assert.equal(stepAppear(7170, 1), 1);
+  assert.ok(stepAppear(9100, 2) < 1);
+  assert.equal(STEP_OVERLAYS.length, 3);
+  const a = placedOverlayLayout(400, 200, 1000, 800, .165, .27, .18);
+  assert.ok(Math.abs(a.x + a.width / 2 - 165) < .01);
+  const c = placedOverlayLayout(400, 200, 1000, 800, .73, .53, .18);
+  assert.ok(c.x > 500);
+  assert.ok(c.x + c.width < 920);
+});
+
+test("connecting beads grow inward from each island and meet in the middle", async () => {
+  const { stepBridge, STEP_BRIDGE, CHAT_DELAY, STEP_DELAY } = await import("../src/lib/step-overlays");
+  const { connectIslands } = await import("../src/lib/bridge-density");
+  const { densityAt } = await import("../src/lib/dither-cells");
+  const start = CHAT_DELAY + STEP_DELAY;
+  assert.equal(stepBridge(start - 1, 0), 0);
+  assert.ok(stepBridge(start + STEP_BRIDGE / 2, 0) > .4);
+  assert.equal(stepBridge(start + STEP_BRIDGE, 0), 1);
+  const from = { left: 0, top: 40, right: 40, bottom: 80 };
+  const to = { left: 280, top: 40, right: 320, bottom: 80 };
+  assert.equal(connectIslands(from, to, 0, 12), null);
+  const peak = (layer: { field: Float32Array; width: number; height: number; originX: number; originY: number; scale?: number }, x0: number, y0: number, x1: number, y1: number) => {
+    let best = 0;
+    for (let y = y0; y <= y1; y += 4) for (let x = x0; x <= x1; x += 4) best = Math.max(best, densityAt([layer], x, y, 1));
+    return best;
+  };
+  const early = connectIslands(from, to, .18, 12, 0, { end: 22, waist: 8 })!;
+  assert.ok(peak(early, 20, 48, 70, 80) > .3);
+  assert.ok(peak(early, 250, 48, 300, 80) > .3);
+  assert.ok(peak(early, 20, 48, 70, 80) > peak(early, 140, 52, 180, 68));
+  const done = connectIslands(from, to, 1, 12, 0, { end: 36, waist: 6 })!;
+  assert.ok(peak(done, 130, 48, 190, 72) > .2);
+  assert.ok(densityAt([done], 56, 82, 1) > densityAt([done], 160, 82, 1));
+});
+
+test("step and connecting cells live in their own libraries", async () => {
+  const { STEP_LIBRARY, NECK_LIBRARY, TONAL_LIBRARY, MORPH_LIBRARY } = await import("../src/lib/dither-cells");
+  assert.equal(STEP_LIBRARY.id, "step");
+  assert.equal(STEP_LIBRARY.cells.length, 5);
+  assert.equal(NECK_LIBRARY.id, "neck");
+  assert.equal(NECK_LIBRARY.cells.length, 2);
+  assert.equal(NECK_LIBRARY.cells[0].id, "ring");
+  assert.equal(NECK_LIBRARY.cells[1].id, "fill");
+  assert.equal(MORPH_LIBRARY.folder, "morph");
+  assert.ok(MORPH_LIBRARY.cells.every(cell => cell.joins));
+  assert.notEqual(STEP_LIBRARY.folder, TONAL_LIBRARY.folder);
+  assert.notEqual(NECK_LIBRARY.folder, STEP_LIBRARY.folder);
+});
+
+test("paper punch clears white page and keeps step chrome", async () => {
+  const { punchOverlayPaper } = await import("../src/lib/dither-cells");
+  const width = 5, height = 5;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < data.length; index += 4) {
+    data[index] = data[index + 1] = data[index + 2] = 255;
+    data[index + 3] = 255;
+  }
+  const mid = (2 * width + 2) * 4;
+  data[mid] = 40; data[mid + 1] = 40; data[mid + 2] = 40;
+  punchOverlayPaper(data, width, height);
+  assert.equal(data[3], 0);
+  assert.equal(data[mid + 3], 255);
+  assert.equal(data[mid], 40);
 });
 
 test("LED cells light from figure alpha and keep the sampled color", async () => {
@@ -49,6 +163,22 @@ test("LED cells light from figure alpha and keep the sampled color", async () =>
 
 test("stamp uploads reject files that are not SVG or PNG", async () => {
   await assert.rejects(loadStampFile(new File(["nope"], "notes.txt", { type: "text/plain" })), /SVG or PNG/);
+});
+
+test("full-bleed color tiles join like Deep; circular stamps stay separate", () => {
+  const paint = (width: number, height: number, r: number, g: number, b: number, a: number, shape: "square" | "circle") => {
+    const data = new Uint8ClampedArray(width * height * 4);
+    const cx = (width - 1) / 2, cy = (height - 1) / 2, radius = width / 2 - .5;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (shape === "circle" && Math.hypot(x - cx, y - cy) > radius) continue;
+      const i = (y * width + x) * 4;
+      data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = a;
+    }
+    return data;
+  };
+  assert.equal(imageFillsSquare(paint(32, 32, 255, 90, 0, 255, "square"), 32, 32), true);
+  assert.equal(imageFillsSquare(paint(32, 32, 255, 255, 255, 255, "square"), 32, 32), false);
+  assert.equal(imageFillsSquare(paint(32, 32, 227, 219, 238, 255, "circle"), 32, 32), false);
 });
 
 test("raw domain densities merge before dithering and adhesion controls the neck", async () => {
@@ -78,6 +208,99 @@ test('tonal dithering mixes neighboring blocks with the requested proportion', a
   assert.ok(choice===2||choice===3);darker+=Number(choice===3);
  }
  assert.equal(darker,32);
+});
+
+test("join lobes melt stair joints into waves while walls and thin arms survive", async () => {
+  const { joinLobeRadius, smoothTileRings, connectGeometry } = await import("../src/lib/dither-cells");
+  assert.equal(joinLobeRadius(24, 0), 0);
+  assert.ok(joinLobeRadius(24, 100) > joinLobeRadius(24, 40));
+  assert.deepEqual(connectGeometry(24, 0), { radius: 12, blur: 1 });
+  assert.equal(connectGeometry(24, 100).radius, 24 * .78);
+  assert.ok(Math.abs(connectGeometry(24, 100).blur - 10.6) < 1e-9);
+
+  const stair: { column: number; row: number }[] = [];
+  for (let step = 0; step < 6; step++) for (let row = step; row < 7; row++) stair.push({ column: step, row });
+  const reach = joinLobeRadius(24, 100);
+  const rings = smoothTileRings(stair, 24, 24, reach);
+  assert.equal(rings.length, 1);
+  const movedOffGrid = rings[0].filter(point =>
+    Math.abs(point.x / 24 - Math.round(point.x / 24)) > .05
+    && Math.abs(point.y / 24 - Math.round(point.y / 24)) > .05);
+  assert.ok(movedOffGrid.length > 2, "alternating stair corners relax away from the square grid");
+
+  const wall = [] as { column: number; row: number }[];
+  for (let column = 0; column < 10; column++) for (let row = 0; row < 4; row++) wall.push({ column, row });
+  const wallRing = smoothTileRings(wall, 24, 24, reach)[0];
+  const horizontalRuns = wallRing.map((point, index, ring) => {
+    const next = ring[(index + 1) % ring.length];
+    return Math.abs(next.y - point.y) < .001 ? Math.abs(next.x - point.x) : 0;
+  });
+  assert.ok(Math.max(...horizontalRuns) >= 240, "a straight wall remains one exact line segment");
+
+  const arm = [{ column: 0, row: 0 }, { column: 1, row: 0 }, { column: 2, row: 0 }, { column: 3, row: 0 }, { column: 4, row: 0 }];
+  const armRing = smoothTileRings(arm, 24, 24, reach)[0];
+  assert.ok(armRing?.length, "a one-cell arm still draws");
+  const height = Math.max(...armRing.map(point => point.y)) - Math.min(...armRing.map(point => point.y));
+  assert.ok(height > 8, `a one-cell arm keeps its body, got ${height.toFixed(1)}px`);
+});
+
+test("rim blocks select stable, separated cells from the occupied boundary", async () => {
+  const { rimCandidateCells, selectRimCells, rimOutwardVector, rimJitter } = await import("../src/lib/dither-cells");
+  const indices = new Int16Array(7 * 7).fill(-1);
+  for (let row = 1; row < 6; row++) for (let column = 1; column < 6; column++) {
+    indices[row * 7 + column] = 0;
+  }
+  const candidates = rimCandidateCells(indices, 7, 7);
+  assert.equal(candidates.length, 16);
+  assert.ok(candidates.every(cell => cell.column === 1 || cell.column === 5 || cell.row === 1 || cell.row === 5));
+  const selected = selectRimCells(candidates, 6);
+  assert.equal(selected.length, 6);
+  assert.deepEqual(selectRimCells(candidates, 6), selected, "selection is stable between animation frames");
+  assert.equal(new Set(selected.map(cell => `${cell.column}:${cell.row}`)).size, selected.length);
+  assert.deepEqual(rimOutwardVector(indices, 7, 7, { column: 3, row: 1 }), { x: 0, y: -1 });
+  const corner = rimOutwardVector(indices, 7, 7, { column: 1, row: 1 });
+  assert.ok(Math.abs(corner.x + Math.SQRT1_2) < 1e-9 && Math.abs(corner.y + Math.SQRT1_2) < 1e-9);
+  const jitter = rimJitter({ column: 3, row: 1 }, 12, 17);
+  assert.equal(rimJitter({ column: 3, row: 1 }, 12, 17), jitter, "noise is stable between frames");
+  assert.ok(Math.abs(jitter) <= 12);
+  assert.notEqual(rimJitter({ column: 3, row: 1 }, 12, 31), jitter, "X, Y, and offset use independent noise");
+});
+
+test('only outer corners of a two-tone mass get a radius', async()=>{
+  const {outerCornerRadius}=await import('../src/lib/dither-cells');
+  const solid=new Set(['0:1','1:0','1:1']);
+  const pale=new Set(['1:0']);
+  assert.equal(outerCornerRadius(2,0,solid,12,pale),12);
+  assert.equal(outerCornerRadius(1,1,solid,12,pale),0);
+  assert.equal(outerCornerRadius(1,1,solid,12,solid),12);
+  assert.equal(outerCornerRadius(0,0,solid,12,pale),0);
+});
+
+test('joining fills stay in solid bands and weld into neighboring notches', async()=>{
+ const {toneCellIndex,weldJoiningIndices}=await import('../src/lib/dither-cells');
+ const levels=[0,.25,1];
+ const joins=[false,true,true];
+ for(let row=0;row<8;row++)for(let col=0;col<8;col++){
+  assert.equal(toneCellIndex(.125,col,row,levels,joins),1);
+  assert.equal(toneCellIndex(.7,col,row,levels,joins),2);
+ }
+ const indices=Int16Array.from([
+  2,2,-1,
+  2,-1,-1,
+  2,1,1,
+ ]);
+ weldJoiningIndices(indices,joins,3,3);
+ assert.equal(indices[4],2);
+ const rim=Int16Array.from([
+  2,2,2,
+  2,2,2,
+  2,2,1,
+ ]);
+ const {coatJoiningRim}=await import('../src/lib/dither-cells');
+ coatJoiningRim(rim,joins,3,3);
+ assert.equal(rim[0],1);
+ assert.equal(rim[4],2);
+ assert.equal(rim[8],1);
 });
 
 test('density depth and light direction create shades inside occupied regions',async()=>{

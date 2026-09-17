@@ -10,8 +10,8 @@
 }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 3vw 18px; }
 .navigation { flex-wrap: wrap; }
-.navigation a { min-height: 40px; }
-.navigation a:hover { color: #e8edf7; }
+.navigation a, .navigation :global(.study-archive-label) { min-height: 40px; }
+.navigation a:hover, .navigation :global(.study-archive-label):hover { color: #e8edf7; }
 .title { font-size: .875rem; font-weight: 400; letter-spacing: -.01em; }
 .figure { margin: 0; position: relative; }
 .canvas { display: block; width: 100%; height: max(480px, calc(100svh - 188px)); max-height: 1000px; }

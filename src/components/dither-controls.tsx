@@ -2,8 +2,19 @@
 import { DITHER_FIELD_DEFAULTS, FIGURE_LED_DEFAULTS, type DitherFieldSettings } from '@/lib/dither-cells';
 import styles from './dither-controls.module.css';
 
-type DitherSliderKey = Exclude<keyof DitherFieldSettings, "showGrid" | "letterBlock" | "ledSize">;
+type DitherSliderKey = Exclude<keyof DitherFieldSettings, "showGrid" | "letterBlock" | "ledSize" | "neckEnd" | "neckWaist">;
 const groups: { title: string; description: string; controls: { key: DitherSliderKey; label: string; min: number; max: number; step: number; unit?: string }[] }[] = [
+  { title: 'Rim layer', description: 'Controls how uploaded blocks scatter above and around the connected field.', controls: [
+    {key:'rimCount',label:'Number',min:0,max:80,step:1},
+    {key:'rimOffset',label:'Outward offset',min:0,max:48,step:1,unit:'px'},
+    {key:'rimOffsetNoise',label:'Offset noise',min:0,max:48,step:1,unit:'px'},
+    {key:'rimNoiseX',label:'X noise',min:0,max:48,step:1,unit:'px'},
+    {key:'rimNoiseY',label:'Y noise',min:0,max:48,step:1,unit:'px'},
+    {key:'rimSize',label:'Size',min:4,max:64,step:1,unit:'px'},
+  ]},
+  { title: 'Join shape', description: 'Join lobes rounds the joints between neighboring tiles, so a stair run reads as one wave. Straight walls stay where they are.', controls: [
+    {key:'joinLobes',label:'Join lobes',min:0,max:100,step:1,unit:'%'},
+  ]},
   { title: 'Domain connection', description: 'Increase adhesion and reach to bring nearby domains together.', controls: [
     {key:'adhesion',label:'Adhesion · 粘连',min:0,max:6,step:.05},
     {key:'reach',label:'Influence reach',min:.6,max:6,step:.05},
@@ -17,25 +28,43 @@ const groups: { title: string; description: string; controls: { key: DitherSlide
     {key:'relief',label:'Surface relief',min:0,max:2,step:.05},
     {key:'lightAngle',label:'Light direction',min:0,max:360,step:5,unit:'°'},
   ]},
-  { title: 'Cells', description: 'Size changes each mark; spacing changes the distance between marks.', controls: [
+  { title: 'Cells', description: 'Size changes each mark; spacing changes the distance between marks. Corner radius fillets free outer corners.', controls: [
     {key:'blockSize',label:'Block size',min:4,max:40,step:1,unit:'px'},
     {key:'spacing',label:'Cell spacing',min:6,max:36,step:1,unit:'px'},
     {key:'rounding',label:'Corner radius',min:0,max:50,step:1,unit:'%'},
   ]},
 ];
-export function DitherControls({value,onChange,led}:{value:DitherFieldSettings;onChange:(settings:DitherFieldSettings)=>void;led?:boolean}) {
-  return <section className={styles.panel} aria-label="Field adjustments">
+export function DitherControls({value,onChange,led,field,onReplay,defaults,gridOnly,rimBlocks}:{value:DitherFieldSettings;onChange:(settings:DitherFieldSettings)=>void;led?:boolean;field?:boolean;onReplay?:()=>void;defaults?:DitherFieldSettings;gridOnly?:boolean;rimBlocks?:boolean}) {
+  const showField = gridOnly ? false : field ?? !led;
+  return <section className={`${styles.panel} ${gridOnly ? styles.dock : ""}`} aria-label="Field adjustments">
     <label className={styles.toggle}>
       <input type="checkbox" checked={value.showGrid !== false}
         onChange={e=>onChange({...value,showGrid:e.target.checked})}/>
-      {led ? "Unlit LEDs" : "Default dot grid"}
+      {gridOnly ? "Dot grid" : led ? "Unlit LEDs" : "Default dot grid"}
     </label>
+    {gridOnly ? null : <>
     {led && <label className={styles.slider}>
       <span>Circle size</span>
       <output htmlFor="dither-ledSize">{value.ledSize} %</output>
       <input id="dither-ledSize" type="range" min={12} max={100} step={1} value={value.ledSize}
         aria-label="Circle size" onChange={e=>onChange({...value,ledSize:Number(e.target.value)})}/>
     </label>}
+    {led && <fieldset className={styles.group}>
+      <legend>Connecting circles</legend>
+      <p>Big circles start at each island, then smaller ones appear inward until they meet in the middle.</p>
+      <label className={styles.slider}>
+        <span>Ends</span>
+        <output htmlFor="dither-neckEnd">{value.neckEnd ?? 52} px</output>
+        <input id="dither-neckEnd" type="range" min={12} max={300} step={1} value={value.neckEnd ?? 52}
+          aria-label="Connecting circle size at the ends" onChange={e=>onChange({...value,neckEnd:Number(e.target.value)})}/>
+      </label>
+      <label className={styles.slider}>
+        <span>Middle</span>
+        <output htmlFor="dither-neckWaist">{value.neckWaist ?? 6} px</output>
+        <input id="dither-neckWaist" type="range" min={2} max={48} step={1} value={value.neckWaist ?? 6}
+          aria-label="Connecting circle size in the middle" onChange={e=>onChange({...value,neckWaist:Number(e.target.value)})}/>
+      </label>
+    </fieldset>}
     {!led && <label className={styles.color}>
       <span>Letter blocks</span>
       <input type="color" value={/^#[0-9a-f]{6}$/i.test(value.letterBlock) ? value.letterBlock : "#111111"}
@@ -43,14 +72,16 @@ export function DitherControls({value,onChange,led}:{value:DitherFieldSettings;o
       <input type="text" spellCheck={false} value={value.letterBlock ?? "#111111"} aria-label="Letter block hex"
         onChange={e=>onChange({...value,letterBlock:e.target.value})}/>
     </label>}
-    {!led && groups.map(group=><fieldset key={group.title} className={styles.group}>
+    {showField && groups.filter(group => group.title !== 'Rim layer' || rimBlocks).map(group=><fieldset key={group.title} className={styles.group}>
       <legend>{group.title}</legend><p>{group.description}</p>
       {group.controls.map(control=><label key={control.key} className={styles.slider}>
-        <span>{control.label}</span><output htmlFor={`dither-${control.key}`}>{value[control.key]}{control.unit ? ` ${control.unit}` : control.key === 'softness' ? '' : '×'}</output>
+        <span>{control.label}</span><output htmlFor={`dither-${control.key}`}>{value[control.key]}{control.unit ? ` ${control.unit}` : control.key === 'softness' || control.key === 'rimCount' ? '' : '×'}</output>
         <input id={`dither-${control.key}`} type="range" min={control.min} max={control.max} step={control.step} value={value[control.key]}
           onChange={e=>onChange({...value,[control.key]:Number(e.target.value)})}/>
       </label>)}
     </fieldset>)}
-    <button type="button" className={styles.reset} onClick={()=>onChange({...(led ? FIGURE_LED_DEFAULTS : DITHER_FIELD_DEFAULTS)})}>Reset field settings</button>
+    {onReplay && <button type="button" className={styles.replay} onClick={onReplay}>Replay sequence</button>}
+    <button type="button" className={styles.reset} onClick={()=>onChange({...(defaults ?? (led ? FIGURE_LED_DEFAULTS : DITHER_FIELD_DEFAULTS))})}>Reset field settings</button>
+    </>}
   </section>;
 }

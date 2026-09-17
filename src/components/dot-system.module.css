@@ -3,8 +3,8 @@
 .workspace { color-scheme: light; min-height: 100svh; overflow: hidden; background: #fff; color: #111; padding: 18px 2.4vw 2.4vw; }
 .header { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 42px; }
 .navigation { flex-wrap: wrap; }
-.navigation a { min-height: 40px; }
-.navigation a:hover { color: #111; }
+.navigation a, .navigation :global(.study-archive-label) { min-height: 40px; }
+.navigation a:hover, .navigation :global(.study-archive-label):hover { color: #111; }
 .title { font-weight: 400; font-size: .875rem; letter-spacing: 0; }
 .stage { position: relative; width: 100%; height: calc(100svh - 78px); min-height: 520px; overflow: hidden; background: #fff; }
 .canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }

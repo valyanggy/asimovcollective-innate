@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import { DotSystem } from "@/components/dot-system";
 
 export const metadata: Metadata = {
-  title: "10_push/button — Push button",
-  description: "The push-button figure dithered on the default field grid like an LED screen.",
+  title: "10_push/button — Innate OS",
+  description: "The Innate OS chat image centered on the default LED field grid.",
 };
 
 export default function PushButtonStudy() {
-  return <DotSystem dither figure="/figures/push-button.svg" />;
+  return <DotSystem dither figure="/figures/innate-os-card.png" />;
 }

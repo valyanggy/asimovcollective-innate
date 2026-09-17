@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { StudyNav } from "./study-nav";
 import { drawFacePills, loadFaceMask, type FaceMask } from "@/lib/face-pills";
 import styles from "./face-field.module.css";
 
@@ -39,14 +39,7 @@ export function FaceField() {
 
   return <main className={styles.workspace}>
     <header className={styles.header}>
-      <nav className={`study-nav ${styles.navigation}`} aria-label="Studies">
-        <Link href="/">05</Link><Link href="/05_2">05_2</Link><Link href="/05_3">05_3</Link>
-        <Link href="/06">06</Link><Link href="/07" aria-current="page">07</Link>
-        <Link href="/08_system">08_system</Link><Link href="/09_system">09_system</Link>
-        <Link href="/09_2">09_2</Link><Link href="/09_3">09_3</Link>
-        <Link href="/09_4">09_4</Link><Link href="/10_1">10_1</Link>
-        <Link href="/10_push/button">10_push</Link>
-      </nav>
+      <StudyNav className={styles.navigation} />
       <h1 className={styles.title}>Face field</h1>
     </header>
     <figure className={styles.figure}>

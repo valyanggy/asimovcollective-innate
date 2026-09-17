@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { SignalStatic } from "./signal-static";
+import { StudyNav } from "./study-nav";
 import { OBJECT_CHOICES, OBJECT_LABELS, type ObjectId } from "@/lib/object-catalog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CameraView } from "@/lib/hand-model";
@@ -106,20 +106,7 @@ export function ColorField({ variant = "05" }: { variant?: "05" | "05_2" | "05_3
       </header> */}
 
       <div className="study-toolbar">
-        <nav className="study-nav" aria-label="Studies">
-          <Link href="/" aria-current={variant === "05" ? "page" : undefined}>05</Link>
-          <Link href="/05_2" aria-current={variant === "05_2" ? "page" : undefined}>05_2</Link>
-          <Link href="/05_3" aria-current={variant === "05_3" ? "page" : undefined}>05_3</Link>
-          <Link href="/06" aria-current={variant === "06" ? "page" : undefined}>06</Link>
-          <Link href="/07">07</Link>
-          <Link href="/08_system">08_system</Link>
-          <Link href="/09_system">09_system</Link>
-          <Link href="/09_2">09_2</Link>
-          <Link href="/09_3">09_3</Link>
-          <Link href="/09_4">09_4</Link>
-          <Link href="/10_1">10_1</Link>
-          <Link href="/10_push/button">10_push</Link>
-        </nav>
+        <StudyNav />
         {variant === "05_2" && <div className="object-picker" role="group" aria-label="Object">
           {OBJECT_CHOICES.map(object => <button key={object.id} type="button" aria-pressed={objectId === object.id}
             onClick={() => selectObject(object.id)}><span aria-hidden="true">{object.number}</span>{object.label}</button>)}
