@@ -3,9 +3,9 @@ import { drawDomainTrails, type TrailSettings } from "./domain-trails";
 import { drawThinkingArcs } from "./thinking-arcs";
 import { drawComponentLinkage, type LinkageSettings } from "./component-linkage";
 import { fitTerritoryEllipse, type TerritoryEllipse, orderTerritory, territoryCoverage } from "./agent-territory";
-import { drawCenteredOverlay, drawDitheredOccupancy, drawLedOccupancy, emptyOccupancy, overlayDensityBox, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
+import { drawCenteredOverlay, drawDitheredOccupancy, drawLedOccupancy, emptyOccupancy, imageDitherLayer, imageMergeLayers, overlayDensityBox, positionedOverlayPlacement, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
 import { connectIslands, morphIslands } from "./bridge-density";
-import { chatAppear, drawStepOverlays, visibleStepLinks, stepSequenceElapsed, STEP_SCALE, type StepOverlaySpec } from "./step-overlays";
+import { appearingStepLinks, chatAppear, drawAppearingOverlays, drawStepOverlays, sequenceAppear, sequenceOverlayState, stepCardBox, visibleStepLinks, stepSequenceElapsed, STEP_SCALE, type SequenceStudio, type StepOverlaySpec } from "./step-overlays";
 import { cellBounds, drawGridCells, placeGridCells } from "./grid-cells";
 
 export type Dot = { territory?: number; x: number; y: number; radius: number; cyclePhase: number; cycleSpeed: number; blurAmount: number };
@@ -852,7 +852,7 @@ function blurRingBackdrop(canvas: HTMLCanvasElement, width: number, height: numb
   return backdrop;
 }
 
-export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, headlinePosition?: Point | null, rectangular = false, objectPositions?: (Point | null)[], linkage?: LinkageSettings, dither?: DitherStamp, ditherSettings: DitherFieldSettings = DITHER_FIELD_DEFAULTS, trails?: TrailSettings, figure?: CanvasImageSource, steps?: StepOverlaySpec[], stepDither?: DitherStamp, neckDither?: DitherStamp, figureMorph = false, gridOnly = false): DotFieldLayout | undefined {
+export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, headlinePosition?: Point | null, rectangular = false, objectPositions?: (Point | null)[], linkage?: LinkageSettings, dither?: DitherStamp, ditherSettings: DitherFieldSettings = DITHER_FIELD_DEFAULTS, trails?: TrailSettings, figure?: CanvasImageSource, steps?: StepOverlaySpec[], stepDither?: DitherStamp, neckDither?: DitherStamp, figureMorph = false, gridOnly = false, figurePosition?: Point | null, editableFigures = false, figureSize = .158, sequence?: (SequenceStudio & { playing?: boolean }) | null, ditherImage = false, imageMerge = false): DotFieldLayout | undefined {
   const bounds = canvas.getBoundingClientRect();
   if (!bounds.width || !bounds.height) return;
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -877,11 +877,67 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
   if (dither && figure) {
     const { columns, rows, stepX, stepY } = gridMetrics(bounds.width, bounds.height);
     drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
-    const elapsed = stepSequenceElapsed(canvas, time);
-    const chat = time === 0 ? 1 : chatAppear(elapsed);
+    if (ditherImage) {
+      const layer = imageDitherLayer(figure, bounds.width, bounds.height);
+      const layers = imageMerge
+        ? imageMergeLayers(figure, bounds.width, bounds.height, ditherSettings)
+        : [layer];
+      const spacing = ditherSettings.spacing;
+      if (dither.ramp?.length) {
+        drawDitheredOccupancy(context, layers, Math.ceil(bounds.width / spacing), Math.ceil(bounds.height / spacing), spacing, spacing, dither, ditherSettings,
+          // Match the opaque pale fill used by the 10_3 morph blocks.
+          imageMerge ? "#b0afff" : undefined,
+          // Image ink occupies a narrower shade range; expand it so 01 and Deep can render.
+          imageMerge ? 2.02 : 1);
+      }
+      canvas.dataset.imageMerge = imageMerge ? String(layers.length) : "0";
+      const box = {
+        left: layer.originX,
+        top: layer.originY,
+        right: layer.originX + layer.width * (layer.scale ?? 1),
+        bottom: layer.originY + layer.height * (layer.scale ?? 1),
+      };
+      canvas.dataset.figureImages = "1";
+      return {
+        objects: [{ bounds: box, anchor: { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 } }],
+        headlineBounds: box,
+        headlineAnchor: { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 },
+      };
+    }
+    const timing = sequence?.playing ? sequence : undefined;
+    const elapsed = timing ? stepSequenceElapsed(canvas, time || performance.now()) : stepSequenceElapsed(canvas, time);
+    const nextFigure = sequence?.nextFigure;
+    const nextSteps = sequence?.nextSteps ?? [];
+    const nextSize = sequence?.nextFigureSize ?? figureSize;
+    const hasSecondAct = Boolean(nextFigure || nextSteps.length);
+    const previewSecond = !timing && sequence?.preview === 2;
+    const overlayState = timing && hasSecondAct
+      ? sequenceOverlayState(elapsed, timing, steps?.length ?? 0, nextSteps.length, Boolean(nextFigure))
+      : previewSecond
+        ? {
+            centerFrom: nextFigure ? 0 : 1,
+            centerTo: nextFigure ? 1 : 0,
+            first: (steps ?? []).map(() => ({ appear: 0, bridge: 0 })),
+            second: nextSteps.map(() => ({ appear: 1, bridge: 1 })),
+          }
+        : null;
+    const fullyVisible = !timing && !previewSecond && (time === 0 || editableFigures);
+    const centerFrom = overlayState ? overlayState.centerFrom : fullyVisible ? 1 : timing ? sequenceAppear(elapsed, 0, timing) : chatAppear(elapsed);
+    const centerTo = overlayState?.centerTo ?? 0;
+    const chat = Math.max(centerFrom, centerTo);
+    const centerMix = centerFrom + centerTo === 0 ? 0 : centerTo / (centerFrom + centerTo);
+    const activeFigure = centerMix >= .5 && nextFigure ? nextFigure : figure;
+    const activeSize = nextFigure ? figureSize + (nextSize - figureSize) * centerMix : figureSize;
+    const idleCount = (steps?.length ?? 0) + nextSteps.length;
+    const firstLinks = overlayState
+      ? appearingStepLinks(steps ?? [], bounds.width, bounds.height, overlayState.first, time, 0, idleCount)
+      : visibleStepLinks(steps ?? [], bounds.width, bounds.height, elapsed, fullyVisible, timing, time);
+    const secondLinks = overlayState
+      ? appearingStepLinks(nextSteps, bounds.width, bounds.height, overlayState.second, time, steps?.length ?? 0, idleCount)
+      : [];
+    const stepLinks = [...firstLinks, ...secondLinks];
     if (dither.ramp?.length) {
-      const centerBox = overlayDensityBox(figure, bounds.width, bounds.height);
-      const stepLinks = visibleStepLinks(steps ?? [], bounds.width, bounds.height, elapsed, time === 0);
+      const centerBox = overlayDensityBox(activeFigure, bounds.width, bounds.height, figurePosition, editableFigures, activeSize);
       const dots = createDotField(seed, bounds.width, bounds.height);
       const merge = multiAgentAppearance.mergeScale * ditherSettings.reach;
       const spacing = ditherSettings.spacing;
@@ -918,10 +974,39 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
         }
       }
     }
-    drawCenteredOverlay(context, figure, bounds.width, bounds.height, chat);
-    if (steps?.length) drawStepOverlays(context, steps, bounds.width, bounds.height, elapsed, time === 0);
-    return { headlineBounds: { left: -1, top: -1, right: -1, bottom: -1 }, headlineAnchor: { x: 0, y: 0 } };
+    if (overlayState) {
+      if (centerFrom > 0) drawCenteredOverlay(context, figure, bounds.width, bounds.height, centerFrom, figurePosition, editableFigures, figureSize);
+      if (centerTo > 0 && nextFigure) drawCenteredOverlay(context, nextFigure, bounds.width, bounds.height, centerTo, figurePosition, editableFigures, nextSize);
+      drawAppearingOverlays(context, steps ?? [], bounds.width, bounds.height, overlayState.first.map(step => step.appear), editableFigures, time, 0, idleCount);
+      drawAppearingOverlays(context, nextSteps, bounds.width, bounds.height, overlayState.second.map(step => step.appear), editableFigures, time, steps?.length ?? 0, idleCount);
+    } else {
+      drawCenteredOverlay(context, figure, bounds.width, bounds.height, chat, figurePosition, editableFigures, figureSize);
+      if (steps?.length) drawStepOverlays(context, steps, bounds.width, bounds.height, elapsed, fullyVisible, editableFigures, timing, time);
+    }
+    const showSecondObjects = previewSecond || Boolean(overlayState && overlayState.first.every(step => step.appear <= 0)
+      && (overlayState.centerTo >= 1 || overlayState.second.some(step => step.appear > 0)));
+    canvas.dataset.editAct = showSecondObjects ? "2" : "1";
+    const visibleCenter = showSecondObjects && nextFigure ? nextFigure : figure;
+    const visibleCenterSize = showSecondObjects && nextFigure ? nextSize : figureSize;
+    const editingSteps = showSecondObjects ? nextSteps : steps ?? [];
+    const center = positionedOverlayPlacement(visibleCenter, bounds.width, bounds.height, figurePosition, editableFigures, visibleCenterSize);
+    const figureObjects = [
+      {
+        bounds: { left: center.x, top: center.y, right: center.x + center.width, bottom: center.y + center.height },
+        anchor: { x: center.x + center.width / 2, y: center.y + center.height / 2 },
+      },
+      ...editingSteps.map(step => {
+        const box = stepCardBox(step.image, bounds.width, bounds.height, step.cx, step.cy, step.size);
+        return {
+          bounds: { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height },
+          anchor: { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+        };
+      }),
+    ];
+    canvas.dataset.figureImages = String(figureObjects.length);
+    return { objects: figureObjects, headlineBounds: figureObjects[0].bounds, headlineAnchor: figureObjects[0].anchor };
   }
+  delete canvas.dataset.figureImages;
   if (rectangular) {
     const dots = createDotField(seed, bounds.width, bounds.height);
     const labels = createObstacleLabels(seed, bounds.width, bounds.height, headlinePosition);

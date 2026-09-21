@@ -29,6 +29,27 @@ test("figure ink is empty for transparent pixels and heavier for dark ink than p
   assert.ok(figureInkDensity(43, 0, 204, 255) > figureInkDensity(238, 233, 255, 255));
 });
 
+test("image merge splits letters into islands so adhesion can fill the gap", async () => {
+  const { densityAt, imageLetterIslands, imageMergeLayersFromInk } = await import("../src/lib/dither-cells");
+  const field = new Float32Array(20 * 6);
+  for (let y = 1; y <= 4; y++) for (let x = 1; x <= 3; x++) field[y * 20 + x] = 1;
+  for (let y = 1; y <= 4; y++) for (let x = 16; x <= 18; x++) field[y * 20 + x] = 1;
+  const ink = { field, width: 20, height: 6, originX: 0, originY: 0, scale: 4 };
+  assert.equal(imageLetterIslands(ink).length, 2);
+  const layers = imageMergeLayersFromInk(ink, { reach: 2.4, spacing: 8 });
+  assert.ok(layers.length >= 3);
+  const mid = { x: 40, y: 12 };
+  assert.ok(densityAt(layers, mid.x, mid.y, 4.4) > densityAt(layers, mid.x, mid.y, 0) + .05);
+});
+
+test("image dither treats paper as empty and dark ink as occupancy", async () => {
+  const { imageInkDensity } = await import("../src/lib/dither-cells");
+  assert.equal(imageInkDensity(255, 255, 255, 255), 0);
+  assert.equal(imageInkDensity(0, 0, 0, 0), 0);
+  assert.ok(imageInkDensity(0, 0, 0, 255) > .9);
+  assert.ok(imageInkDensity(40, 40, 40, 255) > imageInkDensity(180, 180, 180, 255));
+});
+
 test("LED radius follows the circle-size percent of the grid pitch", async () => {
   const { ledRadius, FIGURE_LED_DEFAULTS } = await import("../src/lib/dither-cells");
   assert.equal(FIGURE_LED_DEFAULTS.ledSize, 16);
@@ -93,6 +114,68 @@ test("step overlays appear in order and sit on their frame anchors", async () =>
   const c = placedOverlayLayout(400, 200, 1000, 800, .73, .53, .18);
   assert.ok(c.x > 500);
   assert.ok(c.x + c.width < 920);
+});
+
+test("sequence delay, appear, and gap stagger the center then surrounding images", async () => {
+  const { sequenceAppear } = await import("../src/lib/step-overlays");
+  const timing = { delay: 1, appear: .4, gap: 1.2, fade: 1.6 };
+  assert.equal(sequenceAppear(999, 0, timing), 0);
+  assert.equal(sequenceAppear(1400, 0, timing), 1);
+  assert.equal(sequenceAppear(2199, 1, timing), 0);
+  assert.equal(sequenceAppear(2600, 1, timing), 1);
+  assert.ok(sequenceAppear(2800, 2, timing) === 0);
+});
+
+test("a second act fades scene 1 out in reverse, faster than appear, then waits delay", async () => {
+  const { sequenceSceneClock, sequenceOverlayState, SEQUENCE_DEFAULTS } = await import("../src/lib/step-overlays");
+  assert.ok(SEQUENCE_DEFAULTS.fade < SEQUENCE_DEFAULTS.appear);
+  const timing = { delay: 1, appear: .4, gap: 1.2, fade: .2 };
+  const clock = sequenceSceneClock(timing, 3);
+  assert.equal(clock.scene1End, 5);
+  assert.equal(clock.transitionStart, 6.2);
+  assert.ok(Math.abs(clock.scene2Start - 6.7) < 1e-9);
+  const midFirst = sequenceOverlayState(2600, timing, 3, 2, true);
+  assert.equal(midFirst.centerFrom, 1);
+  assert.equal(midFirst.centerTo, 0);
+  assert.equal(midFirst.first[0].appear, 1);
+  assert.equal(midFirst.second[0].appear, 0);
+  const fading = sequenceOverlayState(6300, timing, 3, 2, true);
+  assert.equal(fading.centerFrom, 1);
+  assert.equal(fading.first[0].appear, 1);
+  assert.ok(fading.first[2].appear > 0 && fading.first[2].appear < 1);
+  const later = sequenceOverlayState(6450, timing, 3, 2, true);
+  assert.equal(later.centerFrom, 1);
+  assert.ok(later.first[1].appear > 0 && later.first[1].appear < 1);
+  assert.equal(later.first[2].appear, 0);
+  const held = sequenceOverlayState(6800, timing, 3, 2, true);
+  assert.equal(held.centerFrom, 0);
+  assert.equal(held.centerTo, 0);
+  assert.ok(held.first.every(step => step.appear === 0));
+  assert.equal(held.second[0].appear, 0);
+  const secondIn = sequenceOverlayState(8200, timing, 3, 2, true);
+  assert.equal(secondIn.centerTo, 1);
+  assert.equal(secondIn.second[0].appear, 1);
+  assert.equal(secondIn.second[1].appear, 0);
+  const keepCenter = sequenceOverlayState(6300, timing, 3, 2, false);
+  assert.equal(keepCenter.centerFrom, 1);
+  assert.equal(keepCenter.centerTo, 0);
+  const longFade = sequenceSceneClock({ ...timing, fade: 1.6 }, 3);
+  assert.ok(Math.abs(longFade.scene2Start - 6.7) < 1e-9);
+});
+
+test("surround images take turns blinking and stepping one at a time", async () => {
+  const { surroundIdle, SURROUND_BOB_PX, SURROUND_IDLE_TURN } = await import("../src/lib/step-overlays");
+  assert.deepEqual(surroundIdle(0, 0, 2), { x: 0, y: 0, blink: false });
+  assert.equal(surroundIdle(40, 0, 2).blink, true);
+  assert.equal(surroundIdle(40, 1, 2).blink, false);
+  const up = surroundIdle(1230, 0, 2);
+  assert.equal(up.y, -SURROUND_BOB_PX);
+  assert.equal(up.x, 0);
+  assert.deepEqual(surroundIdle(1230, 1, 2), { x: 0, y: 0, blink: false });
+  const left = surroundIdle(2610, 0, 2);
+  assert.equal(left.x, -SURROUND_BOB_PX);
+  assert.equal(surroundIdle(SURROUND_IDLE_TURN + 40, 1, 2).blink, true);
+  assert.equal(surroundIdle(SURROUND_IDLE_TURN + 40, 0, 2).blink, false);
 });
 
 test("connecting beads grow inward from each island and meet in the middle", async () => {

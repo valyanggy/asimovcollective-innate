@@ -27,6 +27,10 @@ const GROUPS = [
     studies: [
       { href: "/10_3", label: "10_3" },
       { href: "/11", label: "11" },
+      { href: "/11_1", label: "11_1" },
+      { href: "/11_2", label: "11_2" },
+      { href: "/10_4", label: "10_4" },
+      { href: "/10_5", label: "10_5" },
     ],
   },
 ] as const;

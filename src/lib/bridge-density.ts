@@ -26,6 +26,11 @@ function move(point: { x: number; y: number }, ux: number, uy: number, distance:
   return { x: point.x + ux * distance, y: point.y + uy * distance };
 }
 
+/** End and waist size jointly define how far a bridge is allowed to reach. */
+export function bridgeDistanceThreshold(endRadius: number, waistRadius: number, spacing: number) {
+  return Math.max(spacing * 2, endRadius * 2.6 + waistRadius * 4 + spacing * 2);
+}
+
 /** Large at the docks, smallest at the midpoint — the bead profile in the sketch. */
 function beadRadius(travel: number, endRadius: number, waistRadius: number) {
   const pinch = Math.sin(clamp(travel) * Math.PI);
@@ -161,8 +166,11 @@ export function morphIslands(
   const distance = Math.hypot(dx, dy) || 1, ux = dx / distance, uy = dy / distance;
   const start = rayBoxExit(from, ux, uy), end = rayBoxExit(to, -ux, -uy);
   const spanX = end.x - start.x, spanY = end.y - start.y, span = Math.hypot(spanX, spanY) || 1;
-  const endRadius = Math.min(Math.max(spacing * 2.7, profile?.end ?? spacing * 4.8), span * .34);
-  const waist = Math.min(endRadius * .78, Math.max(spacing * .65, profile?.waist ?? spacing * 1.35));
+  const requestedEnd = profile?.end ?? spacing * 4.8;
+  const requestedWaist = profile?.waist ?? spacing * 1.35;
+  if (span > bridgeDistanceThreshold(requestedEnd, requestedWaist, spacing)) return null;
+  const endRadius = Math.min(Math.max(2, requestedEnd), span * .34);
+  const waist = Math.min(endRadius * .78, Math.max(2, requestedWaist));
   const pad = endRadius + spacing * 2;
   const minX = Math.min(start.x, end.x) - pad, minY = Math.min(start.y, end.y) - pad;
   const maxX = Math.max(start.x, end.x) + pad, maxY = Math.max(start.y, end.y) + pad;

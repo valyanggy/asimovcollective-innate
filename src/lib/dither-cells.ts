@@ -76,6 +76,21 @@ export const MORPH_LIBRARY: ToneLibrary = {
     { id: "deep", label: "Deep", level: 1, joins: true, ext: "png" },
   ],
 };
+export const MORPH_0918_LIBRARY: ToneLibrary = {
+  id: "morph-0918", folder: "morph", title: "0918 building blocks",
+  cells: [
+    { id: "25", label: "25", level: .005, ext: "png" },
+    { id: "26", label: "26", level: .006, ext: "png" },
+    { id: "23", label: "23", level: .13 },
+    { id: "24", label: "24", level: .16 },
+    { id: "17", label: "17", level: .181 },
+    { id: "20", label: "20", level: .34, ext: "png" },
+    { id: "06", label: "06", level: .37, ext: "png" },
+    { id: "07", label: "07", level: .51, ext: "png" },
+    { id: "01", label: "01", level: .7, ext: "png" },
+    { id: "deep", label: "Deep", level: 1, joins: true, ext: "png" },
+  ],
+};
 export const DEFAULT_TONE_CELLS = TONAL_LIBRARY.cells;
 export function loadToneLibrary(library: ToneLibrary): Promise<ToneCell[]> {
   return Promise.all(library.cells.map(cell => new Promise<ToneCell>((resolve, reject) => {
@@ -270,6 +285,39 @@ export const PUSH_MORPH_DEFAULTS: DitherFieldSettings = {
   rimNoiseX: 5,
   rimNoiseY: 5,
   rimSize: 24,
+};
+export const PUSH_MORPH_IMAGE_DEFAULTS: DitherFieldSettings = {
+  ...PUSH_MORPH_DEFAULTS,
+  adhesion: 6,
+  reach: 2.2,
+  shadow: .65,
+  contrast: 1.15,
+  softness: .65,
+  blockSize: 15,
+  spacing: 15,
+  relief: .7,
+  ledSize: 16,
+  neckEnd: 95,
+  neckWaist: 12,
+};
+export const IMAGE_DITHER_DEFAULTS: DitherFieldSettings = {
+  ...PUSH_MORPH_IMAGE_DEFAULTS,
+  adhesion: 0,
+  reach: 1,
+  shadow: 1.15,
+  contrast: 1.05,
+  softness: .35,
+  relief: .45,
+};
+export const IMAGE_MERGE_DEFAULTS: DitherFieldSettings = {
+  ...IMAGE_DITHER_DEFAULTS,
+  adhesion: 4.4,
+  reach: 2.6,
+  shadow: 1.45,
+  contrast: .92,
+  softness: .55,
+  joinLobes: 82,
+  relief: .6,
 };
 
 /** Diameter of a grid LED as a fraction of the cell pitch. */
@@ -529,6 +577,21 @@ export function smoothTilePath(
 
 type ConnectedLayer = { canvas: HTMLCanvasElement; x: number; y: number; width: number; height: number };
 const connectedLayers = new WeakMap<CanvasImageSource, Map<string, ConnectedLayer>>();
+const solidJoinTiles = new Map<string, HTMLCanvasElement>();
+
+function solidJoinTile(color: string): HTMLCanvasElement {
+  const cached = solidJoinTiles.get(color);
+  if (cached) return cached;
+  const tile = document.createElement("canvas");
+  tile.width = tile.height = 1;
+  const context = tile.getContext("2d");
+  if (context) {
+    context.fillStyle = color;
+    context.fillRect(0, 0, 1, 1);
+  }
+  solidJoinTiles.set(color, tile);
+  return tile;
+}
 
 /** Ported from the Toggle Dither Connect mode: grow circles modestly, blur, then threshold. */
 export function connectGeometry(size: number, amount: number) {
@@ -867,11 +930,14 @@ export function drawDitheredOccupancy(
   stepY: number,
   stamp: DitherStamp,
   settings?: DitherFieldSettings,
+  mergeUnderlayColor?: string,
+  toneGain = 1,
 ) {
   const radius = settings ? settings.blockSize / 2 : Math.min(stepX, stepY) * .42;
   const levels = stamp.ramp?.map(cell => cell.level);
   const counts = stamp.ramp ? stamp.ramp.map(() => 0) : null;
   const indices = stamp.ramp?.length && settings && levels ? new Int16Array(columns * rows).fill(-1) : null;
+  const mergeMask = mergeUnderlayColor && indices ? new Uint8Array(columns * rows) : null;
   if (indices && settings && levels) {
     for (let row = 0; row < rows; row++) for (let col = 0; col < columns; col++) {
       const x = (col + .5) * stepX, y = (row + .5) * stepY;
@@ -879,14 +945,28 @@ export function drawDitheredOccupancy(
       // Highlights belong to the fringe of a domain, never to empty canvas.
       const fringe = Math.max(0, Math.min(1, (density - .055) / .20));
       if (!ditherHit(fringe * fringe * (3 - 2 * fringe), col, row)) continue;
-      indices[row * columns + col] = toneCellIndex(
-        shadedToneAt(layers, x, y, settings), col, row, levels, stamp.ramp!.map(cell => Boolean(cell.joins)),
+      const rawTone = shadedToneAt(layers, x, y, settings);
+      const tone = Math.min(1, rawTone * toneGain);
+      const cellIndex = row * columns + col;
+      // Keep sparse highlight marks free; the denser letter cells share one liquid silhouette.
+      if (mergeMask && rawTone >= .2) mergeMask[cellIndex] = 1;
+      indices[cellIndex] = toneCellIndex(
+        tone, col, row, levels, stamp.ramp!.map(cell => Boolean(cell.joins)),
       );
     }
     weldJoiningIndices(indices, stamp.ramp!.map(cell => Boolean(cell.joins)), columns, rows);
   }
   const ratio = Math.max(1, Math.abs(context.getTransform().a));
   const joined: JoinedTile[] = [];
+  if (mergeMask && settings && Math.abs(radius * 2 - stepX) < .5 && Math.abs(radius * 2 - stepY) < .5) {
+    const fill = solidJoinTile(mergeUnderlayColor!);
+    const base: JoinedTile[] = [];
+    for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+      if (!mergeMask[row * columns + column]) continue;
+      base.push({ column, row, x: (column + .5) * stepX, y: (row + .5) * stepY, image: fill, tone: "merge", level: 0 });
+    }
+    drawJoinedTone(context, base, base, stepX, stepY, radius * 2, settings.rounding, settings.joinLobes ?? 0);
+  }
   if (indices && stamp.ramp && settings) {
     for (let row=0;row<rows;row++) for (let column=0;column<columns;column++) {
       const index=indices[row*columns+column];
@@ -926,6 +1006,34 @@ export function figureInkDensity(r: number, g: number, b: number, a: number): nu
   return (a / 255) * (.35 + 2.6 * (1 - luminance));
 }
 
+/** Paper stays empty so a wordmark dithers as letters, not a white rectangle. */
+export function imageInkDensity(r: number, g: number, b: number, a: number): number {
+  if (a < 10) return 0;
+  const luminance = (.2126 * r + .7152 * g + .0722 * b) / 255;
+  if (luminance >= .9) return 0;
+  return (a / 255) * (1 - luminance);
+}
+
+function imageInkBounds(data: Uint8ClampedArray, width: number, height: number) {
+  let left = width, top = height, right = -1, bottom = -1;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const index = (y * width + x) * 4;
+    if (imageInkDensity(data[index], data[index + 1], data[index + 2], data[index + 3]) <= 0) continue;
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x);
+    bottom = Math.max(bottom, y);
+  }
+  if (right < left) return { x: 0, y: 0, width, height };
+  const pad = Math.max(4, Math.round(Math.max(right - left, bottom - top) * .04));
+  return {
+    x: Math.max(0, left - pad),
+    y: Math.max(0, top - pad),
+    width: Math.min(width - Math.max(0, left - pad), right - left + 1 + pad * 2),
+    height: Math.min(height - Math.max(0, top - pad), bottom - top + 1 + pad * 2),
+  };
+}
+
 const figureCache = new WeakMap<CanvasImageSource, { key: string; layer: OccupancyLayer }>();
 
 export function figureDensity(image: CanvasImageSource, width: number, height: number): OccupancyLayer {
@@ -959,6 +1067,155 @@ export function figureDensity(image: CanvasImageSource, width: number, height: n
   const layer = { field, width: fieldWidth, height: fieldHeight, originX, originY, scale, colors };
   figureCache.set(image, { key, layer });
   return layer;
+}
+
+const imageDitherCache = new WeakMap<CanvasImageSource, { key: string; layer: OccupancyLayer }>();
+
+/** Sample a source image as occupancy so building-block cells can dither the ink. */
+export function imageDitherLayer(image: CanvasImageSource, width: number, height: number): OccupancyLayer {
+  const sourceWidth = ("naturalWidth" in image && image.naturalWidth) || (image as { width: number }).width || 400;
+  const sourceHeight = ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 210;
+  const probe = document.createElement("canvas");
+  probe.width = Math.max(2, Math.round(sourceWidth));
+  probe.height = Math.max(2, Math.round(sourceHeight));
+  const probeContext = probe.getContext("2d", { willReadFrequently: true });
+  let crop = { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+  if (probeContext) {
+    probeContext.drawImage(image, 0, 0, probe.width, probe.height);
+    crop = imageInkBounds(probeContext.getImageData(0, 0, probe.width, probe.height).data, probe.width, probe.height);
+  }
+  const gutter = Math.min(260, width * .26);
+  const usable = Math.max(width * .55, width - gutter);
+  const maxWidth = usable * .88, maxHeight = height * .34;
+  const aspect = crop.width / Math.max(1, crop.height);
+  let drawWidth = maxWidth, drawHeight = maxWidth / aspect;
+  if (drawHeight > maxHeight) { drawHeight = maxHeight; drawWidth = maxHeight * aspect; }
+  const originX = (usable - drawWidth) / 2, originY = (height - drawHeight) / 2;
+  const scale = Math.max(1.5, Math.min(3, Math.min(drawWidth, drawHeight) / 180));
+  const fieldWidth = Math.max(2, Math.ceil(drawWidth / scale));
+  const fieldHeight = Math.max(2, Math.ceil(drawHeight / scale));
+  const key = `${Math.round(width)}:${Math.round(height)}:${Math.round(originX)}:${fieldWidth}:${fieldHeight}:${crop.x}:${crop.y}:${crop.width}:${crop.height}`;
+  const cached = imageDitherCache.get(image);
+  if (cached?.key === key) return cached.layer;
+  const canvas = document.createElement("canvas");
+  canvas.width = fieldWidth;
+  canvas.height = fieldHeight;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const field = new Float32Array(fieldWidth * fieldHeight);
+  const colors = new Uint8ClampedArray(fieldWidth * fieldHeight * 4);
+  if (context) {
+    context.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, fieldWidth, fieldHeight);
+    const pixels = context.getImageData(0, 0, fieldWidth, fieldHeight).data;
+    colors.set(pixels);
+    for (let index = 0; index < field.length; index++) {
+      field[index] = imageInkDensity(pixels[index * 4], pixels[index * 4 + 1], pixels[index * 4 + 2], pixels[index * 4 + 3]);
+    }
+  }
+  const layer = { field, width: fieldWidth, height: fieldHeight, originX, originY, scale, colors };
+  imageDitherCache.set(image, { key, layer });
+  return layer;
+}
+
+const imageMergeCache = new WeakMap<CanvasImageSource, { key: string; layers: OccupancyLayer[] }>();
+
+export function imageLetterIslands(ink: OccupancyLayer, threshold = .12) {
+  const columns = new Uint8Array(ink.width);
+  for (let y = 0; y < ink.height; y++) for (let x = 0; x < ink.width; x++) {
+    if (ink.field[y * ink.width + x] > threshold) columns[x] = 1;
+  }
+  const runs: [number, number][] = [];
+  let start = -1;
+  for (let x = 0; x <= ink.width; x++) {
+    const on = x < ink.width && Boolean(columns[x] || (x > 0 && x < ink.width - 1 && columns[x - 1] && columns[x + 1]));
+    if (on && start < 0) start = x;
+    if (!on && start >= 0) {
+      runs.push([start, x - 1]);
+      start = -1;
+    }
+  }
+  return runs.map(([left, right]) => {
+    const cells: { x: number; y: number }[] = [];
+    for (let y = 0; y < ink.height; y++) for (let x = left; x <= right; x++) {
+      if (ink.field[y * ink.width + x] > threshold) cells.push({ x, y });
+    }
+    return cells;
+  }).filter(cells => cells.length >= 8);
+}
+
+function chamferDistance(seed: Float32Array, width: number, height: number, scale: number) {
+  const dist = new Float32Array(width * height);
+  const diagonal = scale * Math.SQRT2;
+  for (let index = 0; index < seed.length; index++) dist[index] = seed[index] > 0 ? 0 : 1e9;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const index = y * width + x;
+    let value = dist[index];
+    if (x) value = Math.min(value, dist[index - 1] + scale);
+    if (y) value = Math.min(value, dist[index - width] + scale);
+    if (x && y) value = Math.min(value, dist[index - width - 1] + diagonal);
+    if (x + 1 < width && y) value = Math.min(value, dist[index - width + 1] + diagonal);
+    dist[index] = value;
+  }
+  for (let y = height - 1; y >= 0; y--) for (let x = width - 1; x >= 0; x--) {
+    const index = y * width + x;
+    let value = dist[index];
+    if (x + 1 < width) value = Math.min(value, dist[index + 1] + scale);
+    if (y + 1 < height) value = Math.min(value, dist[index + width] + scale);
+    if (x + 1 < width && y + 1 < height) value = Math.min(value, dist[index + width + 1] + diagonal);
+    if (x && y + 1 < height) value = Math.min(value, dist[index + width - 1] + diagonal);
+    dist[index] = value;
+  }
+  return dist;
+}
+
+export function imageMergeLayersFromInk(ink: OccupancyLayer, settings: Pick<DitherFieldSettings, "reach" | "spacing">) {
+  const scale = ink.scale ?? 1;
+  const softness = Math.max(settings.spacing, 8) * Math.max(.85, settings.reach);
+  const pad = Math.max(2, Math.ceil((softness * 3.4) / scale));
+  const islands = imageLetterIslands(ink);
+  const layers: OccupancyLayer[] = [{ ...ink, combine: "max" }];
+  for (const cells of islands) {
+    let left = ink.width, top = ink.height, right = -1, bottom = -1;
+    for (const cell of cells) {
+      left = Math.min(left, cell.x);
+      top = Math.min(top, cell.y);
+      right = Math.max(right, cell.x);
+      bottom = Math.max(bottom, cell.y);
+    }
+    left = Math.max(0, left - pad);
+    top = Math.max(0, top - pad);
+    right = Math.min(ink.width - 1, right + pad);
+    bottom = Math.min(ink.height - 1, bottom + pad);
+    const width = right - left + 1, height = bottom - top + 1;
+    const seed = new Float32Array(width * height);
+    for (const cell of cells) seed[(cell.y - top) * width + (cell.x - left)] = 1;
+    const distance = chamferDistance(seed, width, height, scale);
+    const field = new Float32Array(width * height);
+    for (let index = 0; index < field.length; index++) field[index] = Math.exp(-distance[index] / softness);
+    layers.push({
+      field,
+      width,
+      height,
+      originX: ink.originX + left * scale,
+      originY: ink.originY + top * scale,
+      scale,
+    });
+  }
+  return layers;
+}
+
+export function imageMergeLayers(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  settings: Pick<DitherFieldSettings, "reach" | "spacing">,
+) {
+  const ink = imageDitherLayer(image, width, height);
+  const key = `${Math.round(ink.originX)}:${ink.width}:${ink.height}:${settings.reach}:${settings.spacing}`;
+  const cached = imageMergeCache.get(image);
+  if (cached?.key === key) return cached.layers;
+  const layers = imageMergeLayersFromInk(ink, settings);
+  imageMergeCache.set(image, { key, layers });
+  return layers;
 }
 
 const EMPTY_OCCUPANCY: OccupancyLayer = { field: new Float32Array(0), width: 0, height: 0, originX: 0, originY: 0 };
@@ -1110,8 +1367,40 @@ export function overlayPlacement(image: CanvasImageSource, width: number, height
   return { punched, ...overlayLayout(punched.width, punched.height, width, height) };
 }
 
-export function overlayDensityBox(image: CanvasImageSource, width: number, height: number) {
-  const box = overlayPlacement(image, width, height);
+export function positionedOverlayPlacement(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  center?: { x: number; y: number } | null,
+  preserveImageBackground = false,
+  size?: number,
+) {
+  const box = preserveImageBackground
+    ? {
+        punched: image,
+        ...overlayLayout(
+          ("naturalWidth" in image && image.naturalWidth) || (image as { width: number }).width || 1,
+          ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 1,
+          width,
+          height,
+        ),
+      }
+    : overlayPlacement(image, width, height);
+  const scale = size ? size / .158 : 1;
+  const sized = scale === 1 ? box : { ...box, width: box.width * scale, height: box.height * scale };
+  const target = center ?? { x: width / 2, y: height / 2 };
+  return { ...sized, x: target.x - sized.width / 2, y: target.y - sized.height / 2 };
+}
+
+export function overlayDensityBox(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  center?: { x: number; y: number } | null,
+  preserveImageBackground = false,
+  size?: number,
+) {
+  const box = positionedOverlayPlacement(image, width, height, center, preserveImageBackground, size);
   const padX = box.width * .12, padY = box.height * .12;
   return {
     left: box.x - padX,
@@ -1121,10 +1410,19 @@ export function overlayDensityBox(image: CanvasImageSource, width: number, heigh
   };
 }
 
-export function drawCenteredOverlay(context: CanvasRenderingContext2D, image: CanvasImageSource, width: number, height: number, appear = 1) {
+export function drawCenteredOverlay(
+  context: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  appear = 1,
+  center?: { x: number; y: number } | null,
+  preserveImageBackground = false,
+  size?: number,
+) {
   if (appear <= 0) return;
   const ease = appear * appear * (3 - 2 * appear);
-  const box = overlayPlacement(image, width, height);
+  const box = positionedOverlayPlacement(image, width, height, center, preserveImageBackground, size);
   context.save();
   context.globalAlpha = ease;
   context.translate(box.x + box.width / 2, box.y + box.height / 2 + (1 - ease) * 10);

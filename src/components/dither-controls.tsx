@@ -51,7 +51,7 @@ export function DitherControls({value,onChange,led,field,onReplay,defaults,gridO
     </label>}
     {led && <fieldset className={styles.group}>
       <legend>Connecting circles</legend>
-      <p>Big circles start at each island, then smaller ones appear inward until they meet in the middle.</p>
+      <p>End and Middle shape the neck and jointly set its maximum reach. Images beyond that distance do not connect.</p>
       <label className={styles.slider}>
         <span>Ends</span>
         <output htmlFor="dither-neckEnd">{value.neckEnd ?? 52} px</output>
@@ -64,6 +64,7 @@ export function DitherControls({value,onChange,led,field,onReplay,defaults,gridO
         <input id="dither-neckWaist" type="range" min={2} max={48} step={1} value={value.neckWaist ?? 6}
           aria-label="Connecting circle size in the middle" onChange={e=>onChange({...value,neckWaist:Number(e.target.value)})}/>
       </label>
+      <p>Current distance cutoff: {Math.round((value.neckEnd ?? 52) * 2.6 + (value.neckWaist ?? 6) * 4 + value.spacing * 2)} px</p>
     </fieldset>}
     {!led && <label className={styles.color}>
       <span>Letter blocks</span>
