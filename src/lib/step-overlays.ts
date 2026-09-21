@@ -1,9 +1,18 @@
+import type { DitherFieldSettings } from "./dither-cells";
+import { mapTypeLineBoxes, typeLinesOf, type TypeFace } from "./type-area";
+
 export type StepOverlaySpec = {
   image: CanvasImageSource;
   label?: string;
   cx: number;
   cy: number;
   size: number;
+  typeCopy?: string;
+  typeFontSize?: number;
+  typeBarWidth?: number;
+  typeBarHeight?: number;
+  typeFace?: TypeFace;
+  typeTrack?: number;
 };
 
 export type StepOverlay = {
@@ -47,6 +56,11 @@ export type SequenceStudio = SequenceTiming & {
   nextFigure?: CanvasImageSource;
   nextFigureSize?: number;
   nextSteps?: StepOverlaySpec[];
+  centerField?: DitherFieldSettings;
+  typeBarWidth?: number;
+  typeBarHeight?: number;
+  nextTypeBarWidth?: number;
+  nextTypeBarHeight?: number;
 };
 
 export const SEQUENCE_DEFAULTS: SequenceTiming = { delay: 1, appear: .4, gap: 1.2, fade: .2 };
@@ -218,6 +232,41 @@ export function stepDensityBox(image: CanvasImageSource, width: number, height: 
   return { left: box.x - padX, top: box.y - padY, right: box.x + box.width + padX, bottom: box.y + box.height + padY };
 }
 
+function unionBoxes(boxes: { left: number; top: number; right: number; bottom: number }[]) {
+  return {
+    left: Math.min(...boxes.map(box => box.left)),
+    top: Math.min(...boxes.map(box => box.top)),
+    right: Math.max(...boxes.map(box => box.right)),
+    bottom: Math.max(...boxes.map(box => box.bottom)),
+  };
+}
+
+function stepBarScale(step: StepOverlaySpec, fallback?: { barWidth?: number; barHeight?: number }) {
+  return {
+    barWidth: step.typeBarWidth ?? fallback?.barWidth,
+    barHeight: step.typeBarHeight ?? fallback?.barHeight,
+  };
+}
+
+export function stepOccupancyBoxes(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  size: number,
+  barScale?: { barWidth?: number; barHeight?: number },
+) {
+  const lines = typeLinesOf(image);
+  const placed = stepCardBox(image, width, height, cx, cy, size);
+  if (lines?.length) {
+    const sourceWidth = ("naturalWidth" in image && image.naturalWidth) || (image as { width: number }).width || 1;
+    const sourceHeight = ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 1;
+    return mapTypeLineBoxes(lines, sourceWidth, sourceHeight, placed, barScale);
+  }
+  return [stepDensityBox(image, width, height, cx, cy, size)];
+}
+
 function shiftedDensityBox(
   box: { left: number; top: number; right: number; bottom: number },
   time: number,
@@ -242,14 +291,17 @@ export function appearingStepLinks(
   motionTime = 0,
   bobIndexOffset = 0,
   idleCount = steps.length + bobIndexOffset,
+  barScale?: { barWidth?: number; barHeight?: number },
 ) {
   const count = Math.max(1, idleCount);
   return steps.flatMap((step, index) => {
     const appear = states[index]?.appear ?? 0;
     if (appear <= 0) return [];
-    const box = stepDensityBox(step.image, width, height, step.cx, step.cy, step.size);
+    const boxes = stepOccupancyBoxes(step.image, width, height, step.cx, step.cy, step.size, stepBarScale(step, barScale))
+      .map(box => shiftedDensityBox(box, motionTime, index + bobIndexOffset, count, appear));
     return [{
-      box: shiftedDensityBox(box, motionTime, index + bobIndexOffset, count, appear),
+      box: unionBoxes(boxes),
+      boxes,
       progress: states[index]?.bridge ?? appear,
     }];
   });
@@ -263,13 +315,16 @@ export function visibleStepLinks(
   reducedMotion = false,
   timing?: SequenceTiming,
   motionTime = 0,
+  barScale?: { barWidth?: number; barHeight?: number },
 ) {
   return steps.flatMap((step, index) => {
     const appear = reducedMotion ? 1 : timing ? sequenceAppear(elapsed, index + 1, timing) : stepAppear(elapsed, index);
     if (appear <= 0) return [];
-    const box = stepDensityBox(step.image, width, height, step.cx, step.cy, step.size);
+    const boxes = stepOccupancyBoxes(step.image, width, height, step.cx, step.cy, step.size, stepBarScale(step, barScale))
+      .map(box => shiftedDensityBox(box, motionTime, index, steps.length, appear));
     return [{
-      box: shiftedDensityBox(box, motionTime, index, steps.length, appear),
+      box: unionBoxes(boxes),
+      boxes,
       progress: reducedMotion ? 1 : timing ? sequenceBridge(elapsed, index + 1, timing) : stepBridge(elapsed, index),
     }];
   });

@@ -37,12 +37,37 @@
 .pasteSetup button { width: 100%; margin-top: 6px; padding: 7px; border: 1px solid #111; background: #fff; color: #111; font: inherit; cursor: pointer; }
 .pasteSetup button:disabled { cursor: default; opacity: .4; }
 .pasteSetup p { margin: 6px 0 0; color: #666; }
-.sequenceBar { position: absolute; z-index: 4; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(1040px, calc(100% - 248px)); padding: 10px 12px; border: 1px solid #e5e5e5; background: rgb(255 255 255 / 94%); color: #222; font: 11px/1.4 Arial, sans-serif; pointer-events: none; }
+.typeArea { display: grid; gap: 6px; margin: 0 0 12px; color: #111; }
+.typeArea textarea { box-sizing: border-box; width: 100%; min-height: 92px; padding: 7px; resize: vertical; border: 1px solid #b7b8b4; background: #fff; color: #111; font-size: 12px; line-height: 1.43; letter-spacing: -.05em; text-align: center; }
+.typeFace { display: flex; gap: 6px; margin: 0 0 10px; }
+.typeFace button { flex: 1; padding: 6px 8px; border: 1px solid #ccc; background: #fff; color: #333; font: inherit; cursor: pointer; }
+.typeFace button[aria-pressed="true"] { border-color: #111; background: #111; color: #fff; }
+.typeSliders { display: grid; gap: 8px; margin: 0 0 12px; }
+.typeSize { display: grid; grid-template-columns: 1fr auto; gap: 2px; margin: 0; color: #111; }
+.typeSize output { color: #666; }
+.typeSize input { width: 100%; grid-column: 1 / -1; accent-color: #222; }
+.typeFieldHandle, .typeFieldHandle.nw, .typeFieldHandle.ne, .typeFieldHandle.sw, .typeFieldHandle.se { cursor: ew-resize; }
+.sequenceBar { position: absolute; z-index: 4; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(1180px, calc(100% - 248px)); padding: 10px 12px; border: 1px solid #e5e5e5; background: rgb(255 255 255 / 94%); color: #222; font: 11px/1.4 Arial, sans-serif; pointer-events: none; }
 .sequenceBar button, .sequenceBar label, .sequenceBar input, .sequenceBar .sequenceSlot { pointer-events: auto; }
+.sequenceHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; pointer-events: auto; }
+.sequenceBarTitle { margin: 0; color: #888; font-size: 10px; letter-spacing: .02em; text-transform: uppercase; }
+.sequenceHide { padding: 4px 10px; border: 1px solid #ccc; background: #fff; color: #333; font: inherit; cursor: pointer; }
+.sequenceHide:hover { border-color: #111; color: #111; }
+.sequenceShow { position: absolute; z-index: 4; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 8px 12px; border: 1px solid #e5e5e5; background: rgb(255 255 255 / 94%); color: #222; font: 11px/1.4 Arial, sans-serif; cursor: pointer; }
+.sequenceShow:hover { border-color: #111; }
 .sequenceAct + .sequenceAct { margin-top: 8px; padding-top: 8px; border-top: 1px solid #eee; }
 .sequenceActTitle { margin: 0 0 6px; color: #888; font-size: 10px; letter-spacing: .02em; text-transform: uppercase; }
 .sequenceSlots { display: flex; flex-wrap: wrap; gap: 8px; }
-.sequenceSlot { display: grid; gap: 3px; min-width: 108px; padding: 6px 8px; border: 1px dashed #b7b8b4; background: #fff; cursor: pointer; }
+.sequenceSlot { display: grid; gap: 3px; min-width: 108px; padding: 6px 8px; border: 1px dashed #b7b8b4; background: #fff; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.sequenceSlotSelected { border-style: solid; border-color: #111; background: #f6f6f6; }
+.sequenceSlotPick { display: grid; gap: 3px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.sequenceSlotHint { color: #888; }
+.sequenceBody { display: flex; align-items: stretch; gap: 14px; }
+.sequenceMain { min-width: 0; flex: 1; }
+.sequenceEditor { box-sizing: border-box; flex: 0 0 min(320px, 34%); padding-left: 14px; border-left: 1px solid #eee; pointer-events: auto; }
+.sequenceEditor .typeArea { margin-bottom: 8px; }
+.sequenceEditor .typeArea textarea { min-height: 72px; }
+.sequenceEditor .typeSliders { margin: 0; }
 .sequenceSlot strong { overflow: hidden; color: #111; text-overflow: ellipsis; white-space: nowrap; }
 .sequenceSlot span { color: #888; }
 .sequenceSlot input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
@@ -58,6 +83,10 @@
 .sequencePlay label { display: grid; grid-template-columns: 1fr auto; min-width: 140px; gap: 2px; }
 .sequencePlay output { color: #666; }
 .sequencePlay input { width: 100%; grid-column: 1 / -1; accent-color: #222; }
+@media (max-width: 900px) {
+  .sequenceBody { flex-direction: column; }
+  .sequenceEditor { flex-basis: auto; padding-left: 0; padding-top: 8px; border-left: 0; border-top: 1px solid #eee; }
+}
 @media (max-width: 700px) {
   .workspace { padding: 12px 12px 16px; }
   .header { align-items: flex-start; gap: 10px; }

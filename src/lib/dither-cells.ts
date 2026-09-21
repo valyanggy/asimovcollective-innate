@@ -6,6 +6,15 @@ export type DitherFieldSettings = {
   showGrid: boolean; letterBlock: string; ledSize: number;
   neckEnd: number; neckWaist: number;
 };
+export const DITHER_APPEARANCE_KEYS = ["shadow", "contrast", "softness", "relief", "lightAngle", "blockSize", "spacing", "rounding"] as const;
+export type DitherAppearanceKey = typeof DITHER_APPEARANCE_KEYS[number];
+
+/** Keep shared connection settings and replace only tone, shading, and cell size. */
+export function withDitherAppearance(base: DitherFieldSettings, appearance: Pick<DitherFieldSettings, DitherAppearanceKey>): DitherFieldSettings {
+  const next = { ...base };
+  for (const key of DITHER_APPEARANCE_KEYS) next[key] = appearance[key];
+  return next;
+}
 export const DITHER_FIELD_DEFAULTS: DitherFieldSettings = {
   adhesion: 6, reach: 2.15, shadow: 2, contrast: .5,
   softness: .32, blockSize: 24, spacing: 24, relief: 2, lightAngle: 360, rounding: 50,
@@ -299,6 +308,18 @@ export const PUSH_MORPH_IMAGE_DEFAULTS: DitherFieldSettings = {
   ledSize: 16,
   neckEnd: 95,
   neckWaist: 12,
+};
+export const TYPE_AREA_FIELD_DEFAULTS: DitherFieldSettings = {
+  ...PUSH_MORPH_IMAGE_DEFAULTS,
+  reach: 1,
+  shadow: .6,
+  contrast: 1.25,
+  softness: 1.65,
+  relief: 0,
+  lightAngle: 0,
+  joinLobes: 63,
+  neckEnd: 84,
+  neckWaist: 11,
 };
 export const IMAGE_DITHER_DEFAULTS: DitherFieldSettings = {
   ...PUSH_MORPH_IMAGE_DEFAULTS,
@@ -1071,8 +1092,32 @@ export function figureDensity(image: CanvasImageSource, width: number, height: n
 
 const imageDitherCache = new WeakMap<CanvasImageSource, { key: string; layer: OccupancyLayer }>();
 
+export function imageDitherPlacement(
+  crop: { width: number; height: number },
+  width: number,
+  height: number,
+  center?: { x: number; y: number } | null,
+  size?: number,
+) {
+  const maxWidth = width * (size ?? .62);
+  const maxHeight = height * .72;
+  const aspect = crop.width / Math.max(1, crop.height);
+  let drawWidth = maxWidth, drawHeight = maxWidth / aspect;
+  if (drawHeight > maxHeight) { drawHeight = maxHeight; drawWidth = maxHeight * aspect; }
+  const gutter = Math.min(260, width * .26);
+  const usable = Math.max(width * .55, width - gutter);
+  const target = center ?? { x: usable / 2, y: height / 2 };
+  return { width: drawWidth, height: drawHeight, x: target.x - drawWidth / 2, y: target.y - drawHeight / 2 };
+}
+
 /** Sample a source image as occupancy so building-block cells can dither the ink. */
-export function imageDitherLayer(image: CanvasImageSource, width: number, height: number): OccupancyLayer {
+export function imageDitherLayer(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  center?: { x: number; y: number } | null,
+  size?: number,
+): OccupancyLayer {
   const sourceWidth = ("naturalWidth" in image && image.naturalWidth) || (image as { width: number }).width || 400;
   const sourceHeight = ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 210;
   const probe = document.createElement("canvas");
@@ -1084,17 +1129,11 @@ export function imageDitherLayer(image: CanvasImageSource, width: number, height
     probeContext.drawImage(image, 0, 0, probe.width, probe.height);
     crop = imageInkBounds(probeContext.getImageData(0, 0, probe.width, probe.height).data, probe.width, probe.height);
   }
-  const gutter = Math.min(260, width * .26);
-  const usable = Math.max(width * .55, width - gutter);
-  const maxWidth = usable * .88, maxHeight = height * .34;
-  const aspect = crop.width / Math.max(1, crop.height);
-  let drawWidth = maxWidth, drawHeight = maxWidth / aspect;
-  if (drawHeight > maxHeight) { drawHeight = maxHeight; drawWidth = maxHeight * aspect; }
-  const originX = (usable - drawWidth) / 2, originY = (height - drawHeight) / 2;
-  const scale = Math.max(1.5, Math.min(3, Math.min(drawWidth, drawHeight) / 180));
-  const fieldWidth = Math.max(2, Math.ceil(drawWidth / scale));
-  const fieldHeight = Math.max(2, Math.ceil(drawHeight / scale));
-  const key = `${Math.round(width)}:${Math.round(height)}:${Math.round(originX)}:${fieldWidth}:${fieldHeight}:${crop.x}:${crop.y}:${crop.width}:${crop.height}`;
+  const box = imageDitherPlacement(crop, width, height, center, size);
+  const scale = Math.max(1.5, Math.min(3, Math.min(box.width, box.height) / 180));
+  const fieldWidth = Math.max(2, Math.ceil(box.width / scale));
+  const fieldHeight = Math.max(2, Math.ceil(box.height / scale));
+  const key = `${Math.round(box.x)}:${Math.round(box.y)}:${Math.round(box.width)}:${Math.round(box.height)}:${fieldWidth}:${fieldHeight}:${crop.x}:${crop.y}:${crop.width}:${crop.height}`;
   const cached = imageDitherCache.get(image);
   if (cached?.key === key) return cached.layer;
   const canvas = document.createElement("canvas");
@@ -1111,7 +1150,7 @@ export function imageDitherLayer(image: CanvasImageSource, width: number, height
       field[index] = imageInkDensity(pixels[index * 4], pixels[index * 4 + 1], pixels[index * 4 + 2], pixels[index * 4 + 3]);
     }
   }
-  const layer = { field, width: fieldWidth, height: fieldHeight, originX, originY, scale, colors };
+  const layer = { field, width: fieldWidth, height: fieldHeight, originX: box.x, originY: box.y, scale, colors };
   imageDitherCache.set(image, { key, layer });
   return layer;
 }
@@ -1208,9 +1247,11 @@ export function imageMergeLayers(
   width: number,
   height: number,
   settings: Pick<DitherFieldSettings, "reach" | "spacing">,
+  center?: { x: number; y: number } | null,
+  size?: number,
 ) {
-  const ink = imageDitherLayer(image, width, height);
-  const key = `${Math.round(ink.originX)}:${ink.width}:${ink.height}:${settings.reach}:${settings.spacing}`;
+  const ink = imageDitherLayer(image, width, height, center, size);
+  const key = `${Math.round(ink.originX)}:${Math.round(ink.originY)}:${ink.width}:${ink.height}:${settings.reach}:${settings.spacing}`;
   const cached = imageMergeCache.get(image);
   if (cached?.key === key) return cached.layers;
   const layers = imageMergeLayersFromInk(ink, settings);
@@ -1375,15 +1416,18 @@ export function positionedOverlayPlacement(
   preserveImageBackground = false,
   size?: number,
 ) {
+  const sourceWidth = ("naturalWidth" in image && image.naturalWidth) || (image as { width: number }).width || 1;
+  const sourceHeight = ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 1;
+  if (typeof HTMLCanvasElement !== "undefined" && image instanceof HTMLCanvasElement && image.dataset.typeField === "1") {
+    const drawWidth = width * (size ?? .158);
+    const drawHeight = drawWidth * sourceHeight / Math.max(1, sourceWidth);
+    const target = center ?? { x: width / 2, y: height / 2 };
+    return { punched: image, width: drawWidth, height: drawHeight, x: target.x - drawWidth / 2, y: target.y - drawHeight / 2 };
+  }
   const box = preserveImageBackground
     ? {
         punched: image,
-        ...overlayLayout(
-          ("naturalWidth" in image && image.naturalWidth) || (image as { width: number }).width || 1,
-          ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 1,
-          width,
-          height,
-        ),
+        ...overlayLayout(sourceWidth, sourceHeight, width, height),
       }
     : overlayPlacement(image, width, height);
   const scale = size ? size / .158 : 1;

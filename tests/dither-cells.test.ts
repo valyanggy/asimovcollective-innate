@@ -42,6 +42,15 @@ test("image merge splits letters into islands so adhesion can fill the gap", asy
   assert.ok(densityAt(layers, mid.x, mid.y, 4.4) > densityAt(layers, mid.x, mid.y, 0) + .05);
 });
 
+test("image dither placement follows a drag center and size", async () => {
+  const { imageDitherPlacement } = await import("../src/lib/dither-cells");
+  const box = imageDitherPlacement({ width: 200, height: 50 }, 1000, 800, { x: 400, y: 300 }, .5);
+  assert.equal(box.width, 500);
+  assert.equal(box.height, 125);
+  assert.equal(box.x, 150);
+  assert.equal(box.y, 237.5);
+});
+
 test("image dither treats paper as empty and dark ink as occupancy", async () => {
   const { imageInkDensity } = await import("../src/lib/dither-cells");
   assert.equal(imageInkDensity(255, 255, 255, 255), 0);
@@ -411,4 +420,16 @@ test('coarse density sampling uses world coordinates at high reach',async()=>{
  const moved=ditherDensity(canvas,0,[{left:200,top:150,right:360,bottom:210}],{x:200,y:150},[],0,2.2*6,24);
  assert.equal(densityAt([layer],170,130,1),densityAt([moved],270,180,1));
  assert.ok(Array.from(layer.field).every(Number.isFinite));
+});
+
+test("withDitherAppearance copies tone, shading, and cells without changing adhesion", async () => {
+  const { PUSH_MORPH_IMAGE_DEFAULTS, withDitherAppearance } = await import("../src/lib/dither-cells");
+  const next = withDitherAppearance(PUSH_MORPH_IMAGE_DEFAULTS, {
+    ...PUSH_MORPH_IMAGE_DEFAULTS,
+    shadow: 2,
+    blockSize: 30,
+  });
+  assert.equal(next.shadow, 2);
+  assert.equal(next.blockSize, 30);
+  assert.equal(next.adhesion, PUSH_MORPH_IMAGE_DEFAULTS.adhesion);
 });

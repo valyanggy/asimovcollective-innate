@@ -3,9 +3,10 @@ import { drawDomainTrails, type TrailSettings } from "./domain-trails";
 import { drawThinkingArcs } from "./thinking-arcs";
 import { drawComponentLinkage, type LinkageSettings } from "./component-linkage";
 import { fitTerritoryEllipse, type TerritoryEllipse, orderTerritory, territoryCoverage } from "./agent-territory";
-import { drawCenteredOverlay, drawDitheredOccupancy, drawLedOccupancy, emptyOccupancy, imageDitherLayer, imageMergeLayers, overlayDensityBox, positionedOverlayPlacement, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
+import { drawCenteredOverlay, drawDitheredOccupancy, drawLedOccupancy, emptyOccupancy, imageDitherLayer, imageMergeLayers, overlayDensityBox, positionedOverlayPlacement, withDitherAppearance, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
 import { connectIslands, morphIslands } from "./bridge-density";
 import { appearingStepLinks, chatAppear, drawAppearingOverlays, drawStepOverlays, sequenceAppear, sequenceOverlayState, stepCardBox, visibleStepLinks, stepSequenceElapsed, STEP_SCALE, type SequenceStudio, type StepOverlaySpec } from "./step-overlays";
+import { mapTypeLineBoxes, nearestTypeBox, typeLineMergeScale, typeLinesOf } from "./type-area";
 import { cellBounds, drawGridCells, placeGridCells } from "./grid-cells";
 
 export type Dot = { territory?: number; x: number; y: number; radius: number; cyclePhase: number; cycleSpeed: number; blurAmount: number };
@@ -878,9 +879,9 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
     const { columns, rows, stepX, stepY } = gridMetrics(bounds.width, bounds.height);
     drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
     if (ditherImage) {
-      const layer = imageDitherLayer(figure, bounds.width, bounds.height);
+      const layer = imageDitherLayer(figure, bounds.width, bounds.height, figurePosition, figureSize);
       const layers = imageMerge
-        ? imageMergeLayers(figure, bounds.width, bounds.height, ditherSettings)
+        ? imageMergeLayers(figure, bounds.width, bounds.height, ditherSettings, figurePosition, figureSize)
         : [layer];
       const spacing = ditherSettings.spacing;
       if (dither.ramp?.length) {
@@ -938,24 +939,61 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
     const stepLinks = [...firstLinks, ...secondLinks];
     if (dither.ramp?.length) {
       const centerBox = overlayDensityBox(activeFigure, bounds.width, bounds.height, figurePosition, editableFigures, activeSize);
-      const dots = createDotField(seed, bounds.width, bounds.height);
+      const typeLines = typeLinesOf(activeFigure);
+      const typePlacement = typeLines?.length
+        ? positionedOverlayPlacement(activeFigure, bounds.width, bounds.height, figurePosition, editableFigures, activeSize)
+        : null;
+      const sourceWidth = ("naturalWidth" in activeFigure && activeFigure.naturalWidth) || (activeFigure as { width: number }).width || 1;
+      const sourceHeight = ("naturalHeight" in activeFigure && activeFigure.naturalHeight) || (activeFigure as { height: number }).height || 1;
+      const centerBar = centerMix >= .5 && nextFigure
+        ? { barWidth: sequence?.nextTypeBarWidth, barHeight: sequence?.nextTypeBarHeight }
+        : { barWidth: sequence?.typeBarWidth, barHeight: sequence?.typeBarHeight };
+      const centerBoxes = typeLines?.length && typePlacement
+        ? mapTypeLineBoxes(typeLines, sourceWidth, sourceHeight, typePlacement, centerBar)
+        : [centerBox];
+      // Type bars should follow the glyphs. The thinking-field dots sit left/low on the stage and fatten that side.
+      const dots = typeLines?.length ? [] : createDotField(seed, bounds.width, bounds.height);
       const merge = multiAgentAppearance.mergeScale * ditherSettings.reach;
       const spacing = ditherSettings.spacing;
       const stampColumns = Math.ceil(bounds.width / spacing);
       const stampRows = Math.ceil(bounds.height / spacing);
+      const centerField = sequence?.centerField;
+      const centerDrawSettings = centerField
+        ? { ...withDitherAppearance(ditherSettings, centerField), rimCount: 0 }
+        : ditherSettings;
+      const centerSpacing = centerDrawSettings.spacing;
+      const centerMerge = typeLineMergeScale(centerBoxes, merge);
+      const centerOrigin = { x: Math.min(...centerBoxes.map(box => box.left)), y: Math.min(...centerBoxes.map(box => box.top)) };
+      canvas.dataset.typeLines = String(centerBoxes.length);
       const centerLayer = chat > 0
-        ? ditherDensity(canvas, 0, [centerBox], { x: centerBox.left, y: centerBox.top }, dots, time, merge, spacing)
+        ? ditherDensity(canvas, 0, centerBoxes, centerOrigin, dots, time, centerMerge, centerSpacing)
         : null;
-      const stepLayers = stepLinks.map((link, slot) => ditherDensity(canvas, slot + 1, [link.box], { x: link.box.left, y: link.box.top }, dots, time,
-        merge * STEP_SCALE, spacing));
+      const stepLayers = stepLinks.map((link, slot) => {
+        const boxes = link.boxes ?? [link.box];
+        return ditherDensity(canvas, slot + 1, boxes, { x: Math.min(...boxes.map(box => box.left)), y: Math.min(...boxes.map(box => box.top)) }, dots, time,
+          typeLineMergeScale(boxes, merge * STEP_SCALE), spacing);
+      });
       if (figureMorph) {
         const morphLayers = chat > 0 ? stepLinks.flatMap(link => {
-          const bridge = morphIslands(centerBox, link.box, link.progress, spacing, time,
+          const dests = link.boxes ?? [link.box];
+          const dock = nearestTypeBox(centerBoxes, link.box);
+          const dest = nearestTypeBox(dests, dock);
+          const bridge = morphIslands(dock, dest, link.progress, spacing, time,
             { end: ditherSettings.neckEnd, waist: ditherSettings.neckWaist });
           return bridge ? [bridge] : [];
         }) : [];
-        const sharedLayers = [...(centerLayer ? [centerLayer] : []), ...stepLayers, ...morphLayers];
-        if (sharedLayers.length) drawDitheredOccupancy(context, sharedLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        if (centerField) {
+          if (centerLayer) {
+            const centerColumns = Math.ceil(bounds.width / centerSpacing);
+            const centerRows = Math.ceil(bounds.height / centerSpacing);
+            drawDitheredOccupancy(context, [centerLayer], centerColumns, centerRows, centerSpacing, centerSpacing, dither, centerDrawSettings);
+          }
+          const surroundLayers = [...stepLayers, ...morphLayers];
+          if (surroundLayers.length) drawDitheredOccupancy(context, surroundLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        } else {
+          const sharedLayers = [...(centerLayer ? [centerLayer] : []), ...stepLayers, ...morphLayers];
+          if (sharedLayers.length) drawDitheredOccupancy(context, sharedLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        }
         canvas.dataset.morphLinks = String(morphLayers.length);
       } else {
         delete canvas.dataset.morphLinks;
@@ -964,7 +1002,10 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
           drawDitheredOccupancy(context, stepLayers, stampColumns, stampRows, spacing, spacing, stepDither, ditherSettings);
         }
         const neckLayers = chat > 0 ? stepLinks.flatMap((link) => {
-          const bridge = connectIslands(centerBox, link.box, link.progress, spacing, time,
+          const dests = link.boxes ?? [link.box];
+          const dock = nearestTypeBox(centerBoxes, link.box);
+          const dest = nearestTypeBox(dests, dock);
+          const bridge = connectIslands(dock, dest, link.progress, spacing, time,
             { end: ditherSettings.neckEnd, waist: ditherSettings.neckWaist });
           return bridge ? [bridge] : [];
         }) : [];
