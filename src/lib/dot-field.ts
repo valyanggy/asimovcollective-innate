@@ -1,9 +1,10 @@
-import { ditherDensity } from "./dither-density";
+import { ditherDensity, withBoxRotation } from "./dither-density";
 import { drawDomainTrails, type TrailSettings } from "./domain-trails";
 import { drawThinkingArcs } from "./thinking-arcs";
 import { drawComponentLinkage, type LinkageSettings } from "./component-linkage";
 import { fitTerritoryEllipse, type TerritoryEllipse, orderTerritory, territoryCoverage } from "./agent-territory";
-import { drawCenteredOverlay, drawDitheredOccupancy, drawLedOccupancy, emptyOccupancy, imageDitherLayer, imageMergeLayers, overlayDensityBox, positionedOverlayPlacement, withDitherAppearance, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
+import { centerShadowGain, drawCenteredOverlay, drawDitheredOccupancy, drawLedOccupancy, emptyOccupancy, imageDitherLayer, imageMergeLayers, overlayDensityBox, positionedOverlayPlacement, scaleOccupancyLayer, DITHER_FIELD_DEFAULTS, type DitherFieldSettings, type DitherStamp, type OccupancyLayer } from "./dither-cells";
+import { drawMediaPair } from "./media-pair";
 import { connectIslands, morphIslands } from "./bridge-density";
 import { appearingStepLinks, chatAppear, drawAppearingOverlays, drawStepOverlays, sequenceAppear, sequenceOverlayState, stepCardBox, visibleStepLinks, stepSequenceElapsed, STEP_SCALE, type SequenceStudio, type StepOverlaySpec } from "./step-overlays";
 import { mapTypeLineBoxes, nearestTypeBox, typeLineMergeScale, typeLinesOf } from "./type-area";
@@ -875,6 +876,16 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
     const objects = cells.map(cell => ({ bounds: cellBounds(cell), anchor: { x: cell.x, y: cell.y } }));
     return { objects, headlineBounds: objects[0]?.bounds ?? { left: -1, top: -1, right: -1, bottom: -1 }, headlineAnchor: objects[0]?.anchor ?? { x: 0, y: 0 } };
   }
+  if (dither && ditherImage && canvas.dataset.mediaPair === "1") {
+    const pair = drawMediaPair(context, figure, bounds.width, bounds.height, dither, ditherSettings, figurePosition, time);
+    canvas.dataset.figureImages = "1";
+    canvas.dataset.imageMerge = "0";
+    return {
+      objects: pair.objects,
+      headlineBounds: pair.objects[0].bounds,
+      headlineAnchor: pair.objects[0].anchor,
+    };
+  }
   if (dither && figure) {
     const { columns, rows, stepX, stepY } = gridMetrics(bounds.width, bounds.height);
     drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
@@ -938,7 +949,10 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
       : [];
     const stepLinks = [...firstLinks, ...secondLinks];
     if (dither.ramp?.length) {
-      const centerBox = overlayDensityBox(activeFigure, bounds.width, bounds.height, figurePosition, editableFigures, activeSize);
+      const centerShadowSize = centerMix >= .5 && nextFigure
+        ? { width: sequence?.nextShadowWidth, height: sequence?.nextShadowHeight }
+        : { width: sequence?.shadowWidth, height: sequence?.shadowHeight };
+      const centerBox = overlayDensityBox(activeFigure, bounds.width, bounds.height, figurePosition, editableFigures, activeSize, centerShadowSize);
       const typeLines = typeLinesOf(activeFigure);
       const typePlacement = typeLines?.length
         ? positionedOverlayPlacement(activeFigure, bounds.width, bounds.height, figurePosition, editableFigures, activeSize)
@@ -948,25 +962,20 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
       const centerBar = centerMix >= .5 && nextFigure
         ? { barWidth: sequence?.nextTypeBarWidth, barHeight: sequence?.nextTypeBarHeight }
         : { barWidth: sequence?.typeBarWidth, barHeight: sequence?.typeBarHeight };
-      const centerBoxes = typeLines?.length && typePlacement
+      const centerBoxes = withBoxRotation(typeLines?.length && typePlacement
         ? mapTypeLineBoxes(typeLines, sourceWidth, sourceHeight, typePlacement, centerBar)
-        : [centerBox];
+        : [centerBox], ditherSettings.centerRotation ?? 0);
       // Type bars should follow the glyphs. The thinking-field dots sit left/low on the stage and fatten that side.
       const dots = typeLines?.length ? [] : createDotField(seed, bounds.width, bounds.height);
       const merge = multiAgentAppearance.mergeScale * ditherSettings.reach;
       const spacing = ditherSettings.spacing;
       const stampColumns = Math.ceil(bounds.width / spacing);
       const stampRows = Math.ceil(bounds.height / spacing);
-      const centerField = sequence?.centerField;
-      const centerDrawSettings = centerField
-        ? { ...withDitherAppearance(ditherSettings, centerField), rimCount: 0 }
-        : ditherSettings;
-      const centerSpacing = centerDrawSettings.spacing;
       const centerMerge = typeLineMergeScale(centerBoxes, merge);
       const centerOrigin = { x: Math.min(...centerBoxes.map(box => box.left)), y: Math.min(...centerBoxes.map(box => box.top)) };
       canvas.dataset.typeLines = String(centerBoxes.length);
       const centerLayer = chat > 0
-        ? ditherDensity(canvas, 0, centerBoxes, centerOrigin, dots, time, centerMerge, centerSpacing)
+        ? scaleOccupancyLayer(ditherDensity(canvas, 0, centerBoxes, centerOrigin, dots, time, centerMerge, spacing), centerShadowGain(ditherSettings))
         : null;
       const stepLayers = stepLinks.map((link, slot) => {
         const boxes = link.boxes ?? [link.box];
@@ -982,18 +991,8 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
             { end: ditherSettings.neckEnd, waist: ditherSettings.neckWaist });
           return bridge ? [bridge] : [];
         }) : [];
-        if (centerField) {
-          if (centerLayer) {
-            const centerColumns = Math.ceil(bounds.width / centerSpacing);
-            const centerRows = Math.ceil(bounds.height / centerSpacing);
-            drawDitheredOccupancy(context, [centerLayer], centerColumns, centerRows, centerSpacing, centerSpacing, dither, centerDrawSettings);
-          }
-          const surroundLayers = [...stepLayers, ...morphLayers];
-          if (surroundLayers.length) drawDitheredOccupancy(context, surroundLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
-        } else {
-          const sharedLayers = [...(centerLayer ? [centerLayer] : []), ...stepLayers, ...morphLayers];
-          if (sharedLayers.length) drawDitheredOccupancy(context, sharedLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
-        }
+        const sharedLayers = [...(centerLayer ? [centerLayer] : []), ...stepLayers, ...morphLayers];
+        if (sharedLayers.length) drawDitheredOccupancy(context, sharedLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
         canvas.dataset.morphLinks = String(morphLayers.length);
       } else {
         delete canvas.dataset.morphLinks;

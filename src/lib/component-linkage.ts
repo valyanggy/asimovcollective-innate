@@ -1,6 +1,6 @@
 import { hermite, type Point } from './dendritic-linkage';
 
-export type Box = { left: number; top: number; right: number; bottom: number };
+export type Box = { left: number; top: number; right: number; bottom: number; angle?: number; pivotX?: number; pivotY?: number };
 export type LinkageSettings = { step: number; tension: number; ring: number; bow: number; arch: number; width: number; opacity: number; nodes: boolean; arcField: boolean; ringBlur: boolean };
 export const LINKAGE_DEFAULTS: LinkageSettings = { step: 6, tension: 1.6, ring: 14.5, bow: 0, arch: 0, width: 4, opacity: 1, nodes: true, arcField: true, ringBlur: true };
 type Strand = { points: Point[]; from: number; to: number };

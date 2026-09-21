@@ -422,6 +422,44 @@ test('coarse density sampling uses world coordinates at high reach',async()=>{
  assert.ok(Array.from(layer.field).every(Number.isFinite));
 });
 
+test("center rotation turns a wide occupancy island onto its side", async () => {
+  const { ditherDensity, withBoxRotation } = await import("../src/lib/dither-density");
+  const { densityAt } = await import("../src/lib/dither-cells");
+  const canvas = {} as HTMLCanvasElement;
+  const box = { left: 80, top: 140, right: 220, bottom: 180 };
+  const flat = ditherDensity(canvas, 0, [box], { x: 80, y: 140 }, [], 0, 4, 16);
+  const turned = ditherDensity(canvas, 1, withBoxRotation([box], 90), { x: 80, y: 140 }, [], 0, 4, 16);
+  assert.ok(densityAt([flat], 200, 160, 1) > densityAt([flat], 150, 210, 1));
+  assert.ok(densityAt([turned], 150, 210, 1) > densityAt([turned], 200, 160, 1));
+});
+
+test("occupancy box scale stretches width and height from the center", async () => {
+  const { scaleOccupancyBox } = await import("../src/lib/dither-cells");
+  const box = { left: 80, top: 140, right: 180, bottom: 180 };
+  const wide = scaleOccupancyBox(box, 2, 1);
+  assert.equal(wide.left, 30);
+  assert.equal(wide.right, 230);
+  assert.equal(wide.top, 140);
+  assert.equal(wide.bottom, 180);
+  const tall = scaleOccupancyBox(box, 1, .5);
+  assert.equal(tall.left, 80);
+  assert.equal(tall.right, 180);
+  assert.equal(tall.top, 150);
+  assert.equal(tall.bottom, 170);
+  assert.equal(scaleOccupancyBox(box, 1, 1), box);
+});
+
+test("center shadow scales only the center occupancy layer", async () => {
+  const { PUSH_MORPH_IMAGE_DEFAULTS, centerShadowGain, scaleOccupancyLayer } = await import("../src/lib/dither-cells");
+  assert.equal(centerShadowGain(PUSH_MORPH_IMAGE_DEFAULTS), 1);
+  assert.equal(centerShadowGain({ ...PUSH_MORPH_IMAGE_DEFAULTS, centerShadow: .325 }), .5);
+  const layer = { field: Float32Array.from([1, .4]), width: 2, height: 1, originX: 0, originY: 0 };
+  const scaled = scaleOccupancyLayer(layer, .5);
+  assert.equal(scaled.field[0], .5);
+  assert.ok(Math.abs(scaled.field[1] - .2) < 1e-6);
+  assert.equal(scaleOccupancyLayer(layer, 1), layer);
+});
+
 test("withDitherAppearance copies tone, shading, and cells without changing adhesion", async () => {
   const { PUSH_MORPH_IMAGE_DEFAULTS, withDitherAppearance } = await import("../src/lib/dither-cells");
   const next = withDitherAppearance(PUSH_MORPH_IMAGE_DEFAULTS, {

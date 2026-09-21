@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { StudyNav } from "./study-nav";
 import { drawDotField } from "@/lib/dot-field";
 import type { DotFieldLayout } from "@/lib/dot-field";
-import { DITHER_FIELD_DEFAULTS, FIGURE_LED_DEFAULTS, IMAGE_DITHER_DEFAULTS, IMAGE_MERGE_DEFAULTS, PUSH_MORPH_DEFAULTS, PUSH_MORPH_IMAGE_DEFAULTS, TYPE_AREA_FIELD_DEFAULTS, MORPH_0918_LIBRARY, MORPH_LIBRARY, NECK_LIBRARY, STEP_LIBRARY, TONAL_LIBRARY, type DitherStamp } from "@/lib/dither-cells";
+import { clampShadowSize, DITHER_FIELD_DEFAULTS, FIGURE_LED_DEFAULTS, IMAGE_DITHER_DEFAULTS, IMAGE_MERGE_DEFAULTS, MEDIA_PAIR_DEFAULTS, PUSH_MORPH_DEFAULTS, PUSH_MORPH_IMAGE_DEFAULTS, SHADOW_SIZE_DEFAULT, SHADOW_SIZE_MAX, SHADOW_SIZE_MIN, TYPE_AREA_FIELD_DEFAULTS, MORPH_0918_LIBRARY, MORPH_LIBRARY, NECK_LIBRARY, STEP_LIBRARY, TONAL_LIBRARY, type DitherStamp } from "@/lib/dither-cells";
+import { clampMediaWipe, MEDIA_BLEED_DEFAULT, MEDIA_BLEED_MAX, MEDIA_BLEED_MIN, MEDIA_PAIR_WIPE_DEFAULT, MEDIA_RANDOM_DEFAULT, MEDIA_RANDOM_MAX, MEDIA_RANDOM_MIN } from "@/lib/media-pair";
 import { replayStepSequence, MORPH_IMAGE_OVERLAYS, SEQUENCE_DEFAULTS, STEP_OVERLAYS, type SequenceStudio, type SequenceTiming, type StepOverlaySpec } from "@/lib/step-overlays";
 import { clampTypeBar, clampTypeFace, clampTypeField, clampTypeFont, clampTypeTrack, renderTypeArea, renderTypeBlock, typeBlockFromSetup, typeBlockLabel, TYPE_AREA_ACT2, TYPE_AREA_ACT2_BAR_HEIGHT, TYPE_AREA_ACT2_BAR_WIDTH, TYPE_AREA_ACT2_FONT, TYPE_AREA_ANCHOR, TYPE_AREA_BAR_HEIGHT, TYPE_AREA_BAR_HEIGHT_MAX, TYPE_AREA_BAR_MAX, TYPE_AREA_BAR_MIN, TYPE_AREA_BAR_WIDTH, TYPE_AREA_DEFAULT, TYPE_AREA_FACE, TYPE_AREA_FACES, TYPE_AREA_FIELD, TYPE_AREA_FONT, TYPE_AREA_FONT_MAX, TYPE_AREA_FONT_MIN, TYPE_AREA_TRACK, TYPE_AREA_TRACK_MAX, TYPE_AREA_TRACK_MIN, TYPE_SURROUND_ACT2, TYPE_SURROUND_DEFAULTS, type TypeBlockSpec, type TypeFace, type TypeSetupImage, type TypeStyle } from "@/lib/type-area";
 import styles from "./dot-system.module.css";
@@ -68,7 +69,7 @@ function loadOverlayImage(file: File): Promise<{ image: HTMLImageElement; label:
   });
 }
 
-export function DotSystem({ rectangular = false, multiple = false, neurons = false, dither = false, figure, pushMorph = false, gridOnly = false, editableImages = false, sequenceStudio = false, ditherImage = false, imageMerge = false, typeArea = false }: { rectangular?: boolean; multiple?: boolean; neurons?: boolean; dither?: boolean; figure?: string; pushMorph?: boolean; gridOnly?: boolean; editableImages?: boolean; sequenceStudio?: boolean; ditherImage?: boolean; imageMerge?: boolean; typeArea?: boolean }) {
+export function DotSystem({ rectangular = false, multiple = false, neurons = false, dither = false, figure, pushMorph = false, gridOnly = false, editableImages = false, sequenceStudio = false, ditherImage = false, imageMerge = false, typeArea = false, mediaPair = false }: { rectangular?: boolean; multiple?: boolean; neurons?: boolean; dither?: boolean; figure?: string; pushMorph?: boolean; gridOnly?: boolean; editableImages?: boolean; sequenceStudio?: boolean; ditherImage?: boolean; imageMerge?: boolean; typeArea?: boolean; mediaPair?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const seed = useRef<number | null>(null);
   const layout = useRef<DotFieldLayout | null>(null);
@@ -86,7 +87,17 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const [pasteStatus, setPasteStatus] = useState("");
   const [pastedSetup, setPastedSetup] = useState("");
-  const [mainImageLabel, setMainImageLabel] = useState(ditherImage ? "intelligence.png" : typeArea ? "Type area" : editableImages ? "1.png" : "innate-os-card.png");
+  const [mainImageLabel, setMainImageLabel] = useState(mediaPair ? "innate-plant-cutout.jpg" : ditherImage ? "intelligence.png" : typeArea ? "Type area" : editableImages ? "1.png" : "innate-os-card.png");
+  const [mediaWipe, setMediaWipe] = useState(MEDIA_PAIR_WIPE_DEFAULT);
+  const mediaWipeRef = useRef(mediaWipe);
+  mediaWipeRef.current = mediaWipe;
+  const [mediaWipePlaying, setMediaWipePlaying] = useState(false);
+  const [mediaRandom, setMediaRandom] = useState(MEDIA_RANDOM_DEFAULT);
+  const mediaRandomRef = useRef(mediaRandom);
+  mediaRandomRef.current = mediaRandom;
+  const [mediaBleed, setMediaBleed] = useState(MEDIA_BLEED_DEFAULT);
+  const mediaBleedRef = useRef(mediaBleed);
+  mediaBleedRef.current = mediaBleed;
   const [typeCopy, setTypeCopy] = useState(TYPE_AREA_DEFAULT);
   const [typeFontSize, setTypeFontSize] = useState(TYPE_AREA_FONT);
   const [typeFieldWidth, setTypeFieldWidth] = useState(TYPE_AREA_FIELD);
@@ -102,6 +113,10 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
   const [nextTypeTrack, setNextTypeTrack] = useState(TYPE_AREA_TRACK);
   const [nextCenterIsType, setNextCenterIsType] = useState(typeArea);
   const [typeEdit, setTypeEdit] = useState<{ act: 1 | 2; slot: "center" | number }>({ act: 1, slot: "center" });
+  const [shadowWidth, setShadowWidth] = useState(SHADOW_SIZE_DEFAULT);
+  const [shadowHeight, setShadowHeight] = useState(SHADOW_SIZE_DEFAULT);
+  const [nextShadowWidth, setNextShadowWidth] = useState(SHADOW_SIZE_DEFAULT);
+  const [nextShadowHeight, setNextShadowHeight] = useState(SHADOW_SIZE_DEFAULT);
   const [stageWidth, setStageWidth] = useState(0);
   const [centerIsType, setCenterIsType] = useState(typeArea);
   const typeSeeded = useRef(false);
@@ -136,9 +151,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
   const [trails, setTrails] = useState(TRAIL_DEFAULTS);
   const trailsRef = useRef(trails);
   trailsRef.current = trails;
-  const fieldDefaults = imageMerge ? IMAGE_MERGE_DEFAULTS : ditherImage ? IMAGE_DITHER_DEFAULTS : typeArea ? TYPE_AREA_FIELD_DEFAULTS : editableImages ? PUSH_MORPH_IMAGE_DEFAULTS : pushMorph ? PUSH_MORPH_DEFAULTS : figure || gridOnly ? FIGURE_LED_DEFAULTS : DITHER_FIELD_DEFAULTS;
+  const fieldDefaults = mediaPair ? MEDIA_PAIR_DEFAULTS : imageMerge ? IMAGE_MERGE_DEFAULTS : ditherImage ? IMAGE_DITHER_DEFAULTS : typeArea ? TYPE_AREA_FIELD_DEFAULTS : editableImages ? PUSH_MORPH_IMAGE_DEFAULTS : pushMorph ? PUSH_MORPH_DEFAULTS : figure || gridOnly ? FIGURE_LED_DEFAULTS : DITHER_FIELD_DEFAULTS;
   const [ditherSettings, setDitherSettings] = useState(fieldDefaults);
-  const [centerSettings, setCenterSettings] = useState(fieldDefaults);
   sequenceRef.current = sequenceStudio ? {
     ...sequence,
     playing: sequencePlaying,
@@ -146,11 +160,14 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     nextFigure: nextFigureRef.current ?? nextFigureImage ?? undefined,
     nextFigureSize: nextImageSizeRef.current,
     nextSteps: nextStepsRef.current,
-    centerField: typeArea ? undefined : centerSettings,
     typeBarWidth,
     typeBarHeight,
     nextTypeBarWidth,
     nextTypeBarHeight,
+    shadowWidth,
+    shadowHeight,
+    nextShadowWidth,
+    nextShadowHeight,
   } : null;
   const defaultOverlays = typeArea ? EMPTY_OVERLAYS : editableImages ? MORPH_IMAGE_OVERLAYS : STEP_OVERLAYS;
   const ditherSettingsRef = useRef(ditherSettings);
@@ -231,7 +248,20 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     let animation = 0, lastDraw = 0;
     const draw = (time = 0) => {
-      try { layout.current = drawDotField(canvas.current!, seed.current!, time, headlinePosition.current, rectangular, (multiple || gridOnly) && !figure ? objectPositions.current : undefined, neurons ? linkage : undefined, dither ? stampRef.current : undefined, ditherSettingsRef.current, dither && !figure ? trailsRef.current : undefined, figureRef.current ?? undefined, figure && !ditherImage ? stepsRef.current : undefined, figure && !ditherImage ? stepStampRef.current : undefined, figure && !ditherImage ? neckStampRef.current : undefined, pushMorph, gridOnly, figurePosition.current, editableImages, mainImageSizeRef.current, sequenceRef.current, ditherImage, imageMerge) ?? null; }
+      try {
+        if (mediaPair) {
+          canvas.current!.dataset.mediaPair = "1";
+          canvas.current!.dataset.mediaWipe = String(mediaWipeRef.current);
+          canvas.current!.dataset.mediaRandom = String(mediaRandomRef.current);
+          canvas.current!.dataset.mediaBleed = String(mediaBleedRef.current);
+        } else {
+          delete canvas.current!.dataset.mediaPair;
+          delete canvas.current!.dataset.mediaWipe;
+          delete canvas.current!.dataset.mediaRandom;
+          delete canvas.current!.dataset.mediaBleed;
+        }
+        layout.current = drawDotField(canvas.current!, seed.current!, time, headlinePosition.current, rectangular, (multiple || gridOnly) && !figure ? objectPositions.current : undefined, neurons ? linkage : undefined, dither ? stampRef.current : undefined, ditherSettingsRef.current, dither && !figure ? trailsRef.current : undefined, figureRef.current ?? undefined, figure && !ditherImage ? stepsRef.current : undefined, figure && !ditherImage ? stepStampRef.current : undefined, figure && !ditherImage ? neckStampRef.current : undefined, pushMorph, gridOnly, figurePosition.current, editableImages, mainImageSizeRef.current, sequenceRef.current, ditherImage, imageMerge) ?? null;
+      }
       catch { setError(true); }
     };
     const tick = (time: number) => {
@@ -267,18 +297,44 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       document.removeEventListener("visibilitychange", syncMotion);
       media.removeEventListener("change", syncMotion);
     };
-  }, [rectangular, multiple, neurons, dither, linkage, figure, figureImage, stepImages, pushMorph, gridOnly, editableImages, nextFigureImage, nextStepImages, ditherImage, imageMerge, typeArea]);
+  }, [rectangular, multiple, neurons, dither, linkage, figure, figureImage, stepImages, pushMorph, gridOnly, editableImages, nextFigureImage, nextStepImages, ditherImage, imageMerge, typeArea, mediaPair]);
 
   useEffect(() => {
     if (sequencePlaying || (!dither && !gridOnly) || !window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const frame = requestAnimationFrame(() => {
       if (!canvas.current || seed.current === null) return;
-      try { layout.current = drawDotField(canvas.current, seed.current, 0, headlinePosition.current, rectangular,
+      try {
+        if (mediaPair) {
+          canvas.current.dataset.mediaPair = "1";
+          canvas.current.dataset.mediaWipe = String(mediaWipeRef.current);
+          canvas.current.dataset.mediaRandom = String(mediaRandomRef.current);
+          canvas.current.dataset.mediaBleed = String(mediaBleedRef.current);
+        } else {
+          delete canvas.current.dataset.mediaPair;
+          delete canvas.current.dataset.mediaWipe;
+          delete canvas.current.dataset.mediaRandom;
+          delete canvas.current.dataset.mediaBleed;
+        }
+        layout.current = drawDotField(canvas.current, seed.current, 0, headlinePosition.current, rectangular,
         (multiple || gridOnly) && !figure ? objectPositions.current : undefined, neurons ? linkage : undefined, stamp, ditherSettingsRef.current, dither && !figure ? trailsRef.current : undefined, figureRef.current ?? undefined, figure && !ditherImage ? stepsRef.current : undefined, figure && !ditherImage ? stepStamp : undefined, figure && !ditherImage ? neckStamp : undefined, pushMorph, gridOnly, figurePosition.current, editableImages, mainImageSizeRef.current, sequenceRef.current, ditherImage, imageMerge) ?? null; }
       catch { setError(true); }
     });
     return () => cancelAnimationFrame(frame);
-  }, [ditherSettings, centerSettings, trails, dither, rectangular, multiple, neurons, linkage, stamp, stepStamp, neckStamp, figure, figureImage, pushMorph, gridOnly, editableImages, mainImageSize, sequence, sequencePlaying, sequencePreview, nextFigureImage, nextStepImages, nextImageSize, ditherImage, imageMerge, typeBarWidth, typeBarHeight, nextTypeBarWidth, nextTypeBarHeight]);
+  }, [ditherSettings, trails, dither, rectangular, multiple, neurons, linkage, stamp, stepStamp, neckStamp, figure, figureImage, pushMorph, gridOnly, editableImages, mainImageSize, sequence, sequencePlaying, sequencePreview, nextFigureImage, nextStepImages, nextImageSize, ditherImage, imageMerge, typeBarWidth, typeBarHeight, nextTypeBarWidth, nextTypeBarHeight, shadowWidth, shadowHeight, nextShadowWidth, nextShadowHeight, mediaWipe, mediaRandom, mediaBleed]);
+
+  useEffect(() => {
+    if (!mediaPair || !mediaWipePlaying) return;
+    const started = performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
+      const travel = Math.min(1, (now - started) / 1800);
+      setMediaWipe(clampMediaWipe(travel));
+      if (travel < 1) frame = requestAnimationFrame(tick);
+      else setMediaWipePlaying(false);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [mediaPair, mediaWipePlaying]);
 
   const canvasPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -297,6 +353,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
         image, label,
         ...slots[(current.length + index) % slots.length],
         size: .14,
+        shadowWidth: SHADOW_SIZE_DEFAULT,
+        shadowHeight: SHADOW_SIZE_DEFAULT,
       }))];
       if (act === 2) setNextStepImages(apply);
       else setStepImages(apply);
@@ -357,7 +415,17 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       if (bounds?.width && bounds.height) figurePosition.current = defaultFigureAnchor(bounds, false, true);
       return;
     }
-    if (!figure) return;
+    if (mediaPair) {
+      setMediaWipe(MEDIA_PAIR_WIPE_DEFAULT);
+      setMediaWipePlaying(false);
+    }
+    if (!figure) {
+      if (mediaPair) {
+        setFigureImage(null);
+        setMainImageLabel("");
+      }
+      return;
+    }
     const image = new Image();
     image.onload = () => {
       setFigureImage(image);
@@ -401,11 +469,14 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       nextFigure: nextFigureRef.current ?? undefined,
       nextFigureSize: nextImageSizeRef.current,
       nextSteps: nextStepsRef.current,
-      centerField: typeArea ? undefined : centerSettings,
       typeBarWidth,
       typeBarHeight,
       nextTypeBarWidth,
       nextTypeBarHeight,
+      shadowWidth,
+      shadowHeight,
+      nextShadowWidth,
+      nextShadowHeight,
     };
     setSequencePlaying(false);
     setSequencePreview(preview);
@@ -423,18 +494,21 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       nextFigure: nextFigureRef.current ?? undefined,
       nextFigureSize: nextImageSizeRef.current,
       nextSteps: nextStepsRef.current,
-      centerField: typeArea ? undefined : centerSettings,
       typeBarWidth,
       typeBarHeight,
       nextTypeBarWidth,
       nextTypeBarHeight,
+      shadowWidth,
+      shadowHeight,
+      nextShadowWidth,
+      nextShadowHeight,
     };
     setSequencePreview(1);
     setSequencePlaying(true);
   };
 
   const beginDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if ((figure && !editableImages && !ditherImage) || !layout.current) return;
+    if ((!mediaPair && figure && !editableImages && !ditherImage) || !layout.current) return;
     const point = canvasPoint(event);
     const objects = layout.current.objects ?? [{ bounds: layout.current.headlineBounds, anchor: layout.current.headlineAnchor }];
     const hit = objects.findLastIndex(({ bounds }) => point.x >= bounds.left && point.x <= bounds.right
@@ -449,7 +523,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     if (editableImages || ditherImage) {
       selectedImageRef.current = hit;
       setSelectedImage(hit);
-      if (typeArea) setTypeEdit({ act: editingSecondAct() ? 2 : 1, slot: hit === 0 ? "center" : hit - 1 });
+      if (sequenceStudio) setTypeEdit({ act: editingSecondAct() ? 2 : 1, slot: hit === 0 ? "center" : hit - 1 });
     }
     activeObject.current = hit;
     if (gridOnly) {
@@ -536,7 +610,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     }
     selectedImageRef.current = null;
     setSelectedImage(null);
-    if (typeArea) setTypeEdit({ act: editingSecondAct() ? 2 : 1, slot: "center" });
+    if (sequenceStudio) setTypeEdit({ act: editingSecondAct() ? 2 : 1, slot: "center" });
   };
 
   const editingSecondAct = () => sequenceStudio && (sequencePreviewRef.current === 2 || canvas.current?.dataset.editAct === "2");
@@ -689,7 +763,6 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       nextTypeTrack: typeArea && nextCenterIsType ? nextTypeTrack : undefined,
       capturedAt: new Date().toISOString(),
       field: { ...ditherSettings },
-      centerField: sequenceStudio && !typeArea ? { ...centerSettings } : undefined,
       buildingBlocks: (stamp.ramp ?? []).map(cell => ({
         id: cell.id,
         name: cell.label,
@@ -709,6 +782,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: typeArea && centerIsType ? typeBarHeight : undefined,
           typeFace: typeArea && centerIsType ? typeFace : undefined,
           typeTrack: typeArea && centerIsType ? typeTrack : undefined,
+          shadowWidth: !typeArea ? shadowWidth : undefined,
+          shadowHeight: !typeArea ? shadowHeight : undefined,
         },
         ...stepsRef.current.map((step, index) => ({
           name: step.label ?? `Image ${index + 2}`,
@@ -721,6 +796,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: step.typeBarHeight,
           typeFace: step.typeFace,
           typeTrack: step.typeTrack,
+          shadowWidth: step.shadowWidth,
+          shadowHeight: step.shadowHeight,
         })),
       ],
       nextImages: sequenceStudio ? [
@@ -735,6 +812,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: typeArea && nextCenterIsType ? nextTypeBarHeight : undefined,
           typeFace: typeArea && nextCenterIsType ? nextTypeFace : undefined,
           typeTrack: typeArea && nextCenterIsType ? nextTypeTrack : undefined,
+          shadowWidth: !typeArea ? nextShadowWidth : undefined,
+          shadowHeight: !typeArea ? nextShadowHeight : undefined,
         },
         ...nextStepsRef.current.map((step, index) => ({
           name: step.label ?? `Image ${index + 2}`,
@@ -747,6 +826,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: step.typeBarHeight,
           typeFace: step.typeFace,
           typeTrack: step.typeTrack,
+          shadowWidth: step.shadowWidth,
+          shadowHeight: step.shadowHeight,
         })),
       ] : undefined,
     };
@@ -776,7 +857,6 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       const setup = parsed as {
         version?: number;
         field?: Record<string, unknown>;
-        centerField?: Record<string, unknown>;
         buildingBlocks?: { id?: string; name?: string; tonePercent?: number; joinEdges?: boolean }[];
         rimBlocks?: { id?: string; name?: string }[];
         images?: TypeSetupImage[];
@@ -842,17 +922,6 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
         setDitherSettings(restored);
       }
 
-      if (!typeArea && setup.centerField && typeof setup.centerField === "object") {
-        const restored = { ...centerSettings };
-        for (const key of Object.keys(restored) as (keyof typeof restored)[]) {
-          const incoming = setup.centerField[key];
-          if (typeof incoming === typeof restored[key]) {
-            (restored as Record<string, unknown>)[key] = incoming;
-          }
-        }
-        setCenterSettings(restored);
-      }
-
       let missing = 0;
       if (Array.isArray(setup.buildingBlocks)) {
         const available = stampRef.current.ramp ?? [];
@@ -903,6 +972,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
             typeBarHeight: typeof image.typeBarHeight === "number" ? clampTypeBar(image.typeBarHeight, TYPE_AREA_BAR_HEIGHT_MAX) : step.typeBarHeight,
             typeFace: image.typeFace ? clampTypeFace(image.typeFace) : step.typeFace,
             typeTrack: typeof image.typeTrack === "number" ? clampTypeTrack(image.typeTrack) : step.typeTrack,
+            shadowWidth: typeof image.shadowWidth === "number" ? clampShadowSize(image.shadowWidth) : step.shadowWidth,
+            shadowHeight: typeof image.shadowHeight === "number" ? clampShadowSize(image.shadowHeight) : step.shadowHeight,
           };
           return typeof next.typeCopy === "string"
             ? [{ ...next, image: renderTypeBlock(next.typeCopy, next.typeFontSize ?? 36, next.size, stage, typeStyleOf(next)), label: typeBlockLabel(next.typeCopy) }]
@@ -925,6 +996,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           else setMainImageSize(next);
         }
         if (main.name) setMainImageLabel(main.name);
+        if (!typeArea && typeof main.shadowWidth === "number") setShadowWidth(clampShadowSize(main.shadowWidth));
+        if (!typeArea && typeof main.shadowHeight === "number") setShadowHeight(clampShadowSize(main.shadowHeight));
         const restored = restoreOverlays(others, stepsRef.current, .4);
         stepsRef.current = restored;
         setStepImages(restored);
@@ -936,6 +1009,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           setNextImageSize(typeArea ? clampTypeField(main.sizePercent / 100) : Math.max(.06, Math.min(.4, main.sizePercent / 100)));
         }
         if (main.name) setNextImageLabel(main.name);
+        if (!typeArea && typeof main.shadowWidth === "number") setNextShadowWidth(clampShadowSize(main.shadowWidth));
+        if (!typeArea && typeof main.shadowHeight === "number") setNextShadowHeight(clampShadowSize(main.shadowHeight));
         const restored = restoreOverlays(others, nextStepsRef.current, .4);
         nextStepsRef.current = restored;
         setNextStepImages(restored);
@@ -955,6 +1030,24 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     const index = slot === "center" ? 0 : slot + 1;
     selectedImageRef.current = index;
     setSelectedImage(index);
+  };
+  const writeShadowSize = (axis: "width" | "height", value: number) => {
+    const next = clampShadowSize(value);
+    const { act, slot } = typeEdit;
+    if (slot === "center") {
+      if (act === 2) {
+        if (axis === "width") setNextShadowWidth(next);
+        else setNextShadowHeight(next);
+      } else if (axis === "width") setShadowWidth(next);
+      else setShadowHeight(next);
+      return;
+    }
+    const apply = (items: StepOverlaySpec[]) => items.map((step, index) => {
+      if (index !== slot) return step;
+      return axis === "width" ? { ...step, shadowWidth: next } : { ...step, shadowHeight: next };
+    });
+    if (act === 2) setNextStepImages(apply);
+    else setStepImages(apply);
   };
   const writeTypeCopy = (copy: string) => {
     const { act, slot } = typeEdit;
@@ -1075,17 +1168,26 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       track: clampTypeTrack((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.typeTrack ?? TYPE_AREA_TRACK),
       title: `Act ${typeEdit.act} · Surround ${typeEdit.slot + 1}`,
     };
+  const editingShadow = typeEdit.slot === "center"
+    ? typeEdit.act === 2
+      ? { width: nextShadowWidth, height: nextShadowHeight, title: "Act 2 · Center" }
+      : { width: shadowWidth, height: shadowHeight, title: "Act 1 · Center" }
+    : {
+      width: ((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.shadowWidth ?? SHADOW_SIZE_DEFAULT),
+      height: ((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.shadowHeight ?? SHADOW_SIZE_DEFAULT),
+      title: `Act ${typeEdit.act} · Surround ${typeEdit.slot + 1}`,
+    };
 
   return <main className={styles.workspace}>
     <header className={styles.header}>
       <StudyNav className={styles.navigation} />
-      <h1 className={styles.title}>{imageMerge ? "Dithered image · Merge" : ditherImage ? "Dithered image" : typeArea ? "Innate OS · Text area" : sequenceStudio ? "Innate OS · Morph sequence" : editableImages ? "Innate OS · Morph images" : gridOnly ? "Grid cells" : pushMorph ? "Innate OS · Morph" : figure ? "Innate OS" : dither ? "Cell system" : neurons ? "Connected agents" : multiple ? "Four agents" : rectangular ? "Rectangle field" : "Circle field"}</h1>
+      <h1 className={styles.title}>{mediaPair ? "Innate OS · Combined media" : imageMerge ? "Dithered image · Merge" : ditherImage ? "Dithered image" : typeArea ? "Innate OS · Text area" : sequenceStudio ? "Innate OS · Morph sequence" : editableImages ? "Innate OS · Morph images" : gridOnly ? "Grid cells" : pushMorph ? "Innate OS · Morph" : figure ? "Innate OS" : dither ? "Cell system" : neurons ? "Connected agents" : multiple ? "Four agents" : rectangular ? "Rectangle field" : "Circle field"}</h1>
     </header>
     <section className={`${styles.stage} ${neurons ? styles.neuralStage : ""}`} aria-label={gridOnly ? "Draggable grid cells" : dither ? "Dithered cell field" : rectangular ? "Interactive rectangular density field" : "One generative circle-grid pattern"}>
-      <canvas ref={canvas} className={`${styles.canvas} ${dragging ? styles.dragging : ""}`} role="img"
+      <canvas ref={canvas} className={`${styles.canvas} ${mediaPair ? styles.mediaCanvas : ""} ${dragging ? styles.dragging : ""}`} role="img"
         onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
-        aria-label={imageMerge ? "A dithered wordmark whose letters are separate density islands that merge by adhesion and reach." : ditherImage ? "An uploaded wordmark dithered with building-block cells on the LED grid." : typeArea ? "A live type block on the LED grid. Edit the copy, then drag, resize, and sequence surrounds around it." : gridOnly ? "Draggable lettered cells on the LED grid. Nearby cells merge into outlined pills. Use the toggle to hide or show the grid." : figure ? "Innate OS chat on the LED grid, with three MARS steps appearing in sequence around the field." : dither ? "Four draggable text agents. Metaball connections are dithered with a circular cell that can be swapped from the library." : neurons ? "Four draggable text agents joined by curved neuron-like paths around a slowly changing dot field." : multiple ? "Four draggable text objects: innate robotics, 2026 Summer Hackathon, skill_walk, and push. Each merges with nearby dots." : rectangular ? "Drag innate robotics to merge and separate stepped rectangular territories on the grid." : "A draggable innate robotics text agent forms liquid connections with nearby thinking-area dots on a stationary outlined grid."} />
-      {(editableImages || ditherImage) && selectedBounds && selectedSize !== undefined && <div className={styles.imageSelection}
+        aria-label={mediaPair ? "A draggable full-color robot photograph with a rounded block edge and scattered photo and purple fragments on a white dot grid." : imageMerge ? "A dithered wordmark whose letters are separate density islands that merge by adhesion and reach." : ditherImage ? "An uploaded wordmark dithered with building-block cells on the LED grid." : typeArea ? "A live type block on the LED grid. Edit the copy, then drag, resize, and sequence surrounds around it." : gridOnly ? "Draggable lettered cells on the LED grid. Nearby cells merge into outlined pills. Use the toggle to hide or show the grid." : figure ? "Innate OS chat on the LED grid, with three MARS steps appearing in sequence around the field." : dither ? "Four draggable text agents. Metaball connections are dithered with a circular cell that can be swapped from the library." : neurons ? "Four draggable text agents joined by curved neuron-like paths around a slowly changing dot field." : multiple ? "Four draggable text objects: innate robotics, 2026 Summer Hackathon, skill_walk, and push. Each merges with nearby dots." : rectangular ? "Drag innate robotics to merge and separate stepped rectangular territories on the grid." : "A draggable innate robotics text agent forms liquid connections with nearby thinking-area dots on a stationary outlined grid."} />
+      {(editableImages || ditherImage) && !mediaPair && selectedBounds && selectedSize !== undefined && <div className={styles.imageSelection}
         style={{
           left: selectedBounds.left,
           top: selectedBounds.top,
@@ -1104,22 +1206,42 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       {gridOnly && <DitherControls led gridOnly value={ditherSettings} onChange={setDitherSettings} />}
       {dither && !gridOnly && <CellLibrary library={ditherImage || editableImages ? MORPH_0918_LIBRARY : pushMorph ? MORPH_LIBRARY : TONAL_LIBRARY} value={stamp} onChange={setStamp}>
         {ditherImage && <div className={styles.imageControls}>
-          <p className={styles.imageControlHeading}>Source image</p>
-          <p className={styles.imageControlNote}>Upload a PNG or JPG, then drag or resize it on the canvas. Dark ink is dithered; nearby shapes merge with Adhesion and Reach.</p>
+          <p className={styles.imageControlHeading}>{mediaPair ? "Treated subject" : "Source image"}</p>
+          <p className={styles.imageControlNote}>{mediaPair
+            ? "Purple and light purple follow the cutout, drifting along it and lagging when you drag. Randomness breaks the edge; over-bleed spills past it. Loose marks wander, and nearby LEDs wake."
+            : "Upload a PNG or JPG, then drag or resize it on the canvas. Dark ink is dithered; nearby shapes merge with Adhesion and Reach."}</p>
+          {mediaPair && <div className={styles.typeSliders}>
+            <label className={styles.typeSize}>
+              <span>Randomness</span>
+              <output htmlFor="media-random">{Math.round(mediaRandom * 100)}%</output>
+              <input id="media-random" type="range" min={MEDIA_RANDOM_MIN} max={MEDIA_RANDOM_MAX} step={.01}
+                value={mediaRandom} aria-label="Randomness of the cutout edge"
+                onChange={event => setMediaRandom(Math.max(MEDIA_RANDOM_MIN, Math.min(MEDIA_RANDOM_MAX, Number(event.target.value))))} />
+            </label>
+            <label className={styles.typeSize}>
+              <span>Over-bleed</span>
+              <output htmlFor="media-bleed">{Math.round(mediaBleed * 100)}%</output>
+              <input id="media-bleed" type="range" min={MEDIA_BLEED_MIN} max={MEDIA_BLEED_MAX} step={.01}
+                value={mediaBleed} aria-label="How far the purple shape bleeds past the cutout"
+                onChange={event => setMediaBleed(Math.max(MEDIA_BLEED_MIN, Math.min(MEDIA_BLEED_MAX, Number(event.target.value))))} />
+            </label>
+          </div>}
           <label className={styles.imageUpload}>
-            <input ref={centerInput} type="file" accept="image/*" aria-label="Replace dithered image"
+            <input ref={centerInput} type="file" accept="image/*" aria-label={mediaPair ? "Replace treated subject" : "Replace dithered image"}
               onChange={event => { void replaceCenterImage(event.target.files); }} />
             Replace image · {mainImageLabel}
           </label>
-          {mainImageLabel !== "intelligence.png" && <button className={styles.imageReset} type="button" onClick={restoreDefaultFigure}>
-            Restore Intelligence
+          {mainImageLabel !== (mediaPair ? "innate-plant-cutout.jpg" : "intelligence.png") && <button className={styles.imageReset} type="button" onClick={restoreDefaultFigure}>
+            {mediaPair ? "Restore plant" : "Restore Intelligence"}
           </button>}
         </div>}
         {editableImages && <div className={styles.imageControls}>
           <p className={styles.imageControlHeading}>{typeArea ? "Type area" : "Draggable images"}</p>
           <p className={styles.imageControlNote}>{typeArea
             ? "Select a type slot in the sequence bar to edit copy, size, and that block’s line width and height."
-            : "Drag any image on the canvas. Copy Setup records parameters, block tones, and image positions."}</p>
+            : sequenceStudio
+              ? "Select a part in the sequence bar to edit that island’s shadow width and height. Copy Setup records the sizes with positions."
+              : "Drag any image on the canvas. Copy Setup records parameters, block tones, and image positions."}</p>
           {typeArea && <button className={styles.imageReset} type="button" onClick={restoreDefaultFigure}>
             Restore type
           </button>}
@@ -1146,10 +1268,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
         {figure && !pushMorph && !ditherImage && <ToneRamp library={STEP_LIBRARY} value={stepStamp} onChange={setStepStamp} />}
         {figure && !pushMorph && !ditherImage && <ToneRamp library={NECK_LIBRARY} value={neckStamp} onChange={setNeckStamp} />}
         <DitherControls led={Boolean(figure)} field value={ditherSettings} onChange={setDitherSettings}
-          defaults={imageMerge ? IMAGE_MERGE_DEFAULTS : ditherImage ? IMAGE_DITHER_DEFAULTS : typeArea ? TYPE_AREA_FIELD_DEFAULTS : editableImages ? PUSH_MORPH_IMAGE_DEFAULTS : pushMorph ? PUSH_MORPH_DEFAULTS : undefined}
+          defaults={mediaPair ? MEDIA_PAIR_DEFAULTS : imageMerge ? IMAGE_MERGE_DEFAULTS : ditherImage ? IMAGE_DITHER_DEFAULTS : typeArea ? TYPE_AREA_FIELD_DEFAULTS : editableImages ? PUSH_MORPH_IMAGE_DEFAULTS : pushMorph ? PUSH_MORPH_DEFAULTS : undefined}
           rimBlocks={pushMorph || ditherImage}
-          centerValue={sequenceStudio && !typeArea ? centerSettings : undefined}
-          onCenterChange={sequenceStudio && !typeArea ? setCenterSettings : undefined}
           onReplay={figure && !editableImages && !ditherImage ? () => { if (canvas.current) replayStepSequence(canvas.current); } : undefined} />
         {!figure && <TrailControls value={trails} onChange={setTrails} />}
       </CellLibrary>}
@@ -1160,8 +1280,8 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           <p className={styles.sequenceBarTitle}>Sequence</p>
           <button type="button" className={styles.sequenceHide} onClick={() => setSequenceOpen(false)}>Hide</button>
         </div>
-        <div className={typeArea ? styles.sequenceBody : undefined}>
-        <div className={typeArea ? styles.sequenceMain : undefined}>
+        <div className={styles.sequenceBody}>
+        <div className={styles.sequenceMain}>
         {([{
           act: 1 as const,
           title: "Act 1 · first sequence",
@@ -1185,17 +1305,21 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
               <span>{row.act === 1 ? "Center" : "Center 2"}</span>
               <strong>{row.act === 2 && !nextCenterIsType ? "Empty" : row.centerLabel}</strong>
               {row.act === 2 && !nextCenterIsType ? "Add type" : "Edit"}
-            </button> : <label className={styles.sequenceSlot}>
-              <span>{row.act === 1 ? "Center" : "Center 2"}</span>
-              <strong>{row.centerLabel}</strong>
-              <input ref={row.centerInput} type="file" aria-label={row.act === 1 ? "Replace center image" : "Replace second center image"} accept="image/*"
-                onChange={event => { void replaceCenterImage(event.target.files, row.act); }} />
-              {row.act === 2 && !nextImageLabel ? "Upload" : "Replace"}
-            </label>}
+            </button> : <div className={`${styles.sequenceSlot} ${typeEdit.act === row.act && typeEdit.slot === "center" ? styles.sequenceSlotSelected : ""}`}>
+              <button type="button" className={styles.sequenceSlotPick} onClick={() => selectTypeSlot(row.act, "center")}>
+                <span>{row.act === 1 ? "Center" : "Center 2"}</span>
+                <strong>{row.centerLabel}</strong>
+              </button>
+              <label>
+                <input ref={row.centerInput} type="file" aria-label={row.act === 1 ? "Replace center image" : "Replace second center image"} accept="image/*"
+                  onChange={event => { void replaceCenterImage(event.target.files, row.act); }} />
+                {row.act === 2 && !nextImageLabel ? "Upload" : "Replace"}
+              </label>
+            </div>}
             {row.surrounds.map((step, index) => <div
-              className={`${styles.sequenceSlot} ${typeArea && typeEdit.act === row.act && typeEdit.slot === index ? styles.sequenceSlotSelected : ""}`}
+              className={`${styles.sequenceSlot} ${typeEdit.act === row.act && typeEdit.slot === index ? styles.sequenceSlotSelected : ""}`}
               key={`${row.act}-${step.label ?? "surround"}-${index}`}>
-              <button type="button" className={styles.sequenceSlotPick} onClick={() => typeArea && selectTypeSlot(row.act, index)}>
+              <button type="button" className={styles.sequenceSlotPick} onClick={() => selectTypeSlot(row.act, index)}>
                 <span>Surround {index + 1}</span>
                 <strong>{step.label ?? `Image ${index + 1}`}</strong>
               </button>
@@ -1223,7 +1347,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           </div>
         </div>)}
         </div>
-        {typeArea && <div className={styles.sequenceEditor}>
+        {typeArea ? <div className={styles.sequenceEditor}>
           <p className={styles.sequenceActTitle}>Type · {editingType.title}</p>
           <label className={styles.typeArea}>
             Type
@@ -1265,6 +1389,24 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
               <input id="type-bar-height" type="range" min={TYPE_AREA_BAR_MIN} max={TYPE_AREA_BAR_HEIGHT_MAX} step={.01}
                 value={editingType.barHeight} aria-label="Type line occupancy height"
                 onChange={event => writeTypeBar("height", Number(event.target.value))} />
+            </label>
+          </div>
+        </div> : <div className={styles.sequenceEditor}>
+          <p className={styles.sequenceActTitle}>Shadow · {editingShadow.title}</p>
+          <div className={styles.typeSliders}>
+            <label className={styles.typeSize}>
+              <span>Shadow width</span>
+              <output htmlFor="shadow-width">{editingShadow.width.toFixed(2)} ×</output>
+              <input id="shadow-width" type="range" min={SHADOW_SIZE_MIN} max={SHADOW_SIZE_MAX} step={.05}
+                value={editingShadow.width} aria-label="Selected part shadow width"
+                onChange={event => writeShadowSize("width", Number(event.target.value))} />
+            </label>
+            <label className={styles.typeSize}>
+              <span>Shadow height</span>
+              <output htmlFor="shadow-height">{editingShadow.height.toFixed(2)} ×</output>
+              <input id="shadow-height" type="range" min={SHADOW_SIZE_MIN} max={SHADOW_SIZE_MAX} step={.05}
+                value={editingShadow.height} aria-label="Selected part shadow height"
+                onChange={event => writeShadowSize("height", Number(event.target.value))} />
             </label>
           </div>
         </div>}

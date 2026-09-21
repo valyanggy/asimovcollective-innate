@@ -94,6 +94,8 @@ export type TypeSetupImage = {
   typeBarHeight?: number;
   typeFace?: TypeFace;
   typeTrack?: number;
+  shadowWidth?: number;
+  shadowHeight?: number;
 };
 
 export function typeBlockFromSetup(image: TypeSetupImage): TypeBlockSpec | null {

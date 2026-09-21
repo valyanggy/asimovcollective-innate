@@ -1,5 +1,5 @@
 export type DitherFieldSettings = {
-  adhesion: number; reach: number; shadow: number; contrast: number;
+  adhesion: number; reach: number; shadow: number; centerShadow: number; centerRotation: number; contrast: number;
   softness: number; blockSize: number; spacing: number; relief: number; lightAngle: number; rounding: number;
   joinLobes: number; rimCount: number; rimOffset: number;
   rimOffsetNoise: number; rimNoiseX: number; rimNoiseY: number; rimSize: number;
@@ -15,8 +15,44 @@ export function withDitherAppearance(base: DitherFieldSettings, appearance: Pick
   for (const key of DITHER_APPEARANCE_KEYS) next[key] = appearance[key];
   return next;
 }
+export function centerShadowGain(settings: DitherFieldSettings) {
+  return settings.shadow === 0 ? 1 : settings.centerShadow / settings.shadow;
+}
+
+export function scaleOccupancyLayer(layer: OccupancyLayer, gain: number): OccupancyLayer {
+  if (gain === 1) return layer;
+  const field = new Float32Array(layer.field.length);
+  for (let i = 0; i < field.length; i++) field[i] = layer.field[i] * gain;
+  return { ...layer, field };
+}
+
+export const SHADOW_SIZE_DEFAULT = 1;
+export const SHADOW_SIZE_MIN = .1;
+export const SHADOW_SIZE_MAX = 4;
+
+export function clampShadowSize(value: number) {
+  if (!Number.isFinite(value)) return SHADOW_SIZE_DEFAULT;
+  return Math.max(SHADOW_SIZE_MIN, Math.min(SHADOW_SIZE_MAX, Math.round(value * 100) / 100));
+}
+
+/** Stretch an occupancy island from its center. 1× keeps the current padded box. */
+export function scaleOccupancyBox<T extends { left: number; top: number; right: number; bottom: number }>(
+  box: T,
+  width = SHADOW_SIZE_DEFAULT,
+  height = SHADOW_SIZE_DEFAULT,
+): T {
+  const sx = clampShadowSize(width);
+  const sy = clampShadowSize(height);
+  if (sx === 1 && sy === 1) return box;
+  const cx = (box.left + box.right) / 2;
+  const cy = (box.top + box.bottom) / 2;
+  const hw = Math.max(1, (box.right - box.left) / 2 * sx);
+  const hh = Math.max(1, (box.bottom - box.top) / 2 * sy);
+  return { ...box, left: cx - hw, top: cy - hh, right: cx + hw, bottom: cy + hh };
+}
+
 export const DITHER_FIELD_DEFAULTS: DitherFieldSettings = {
-  adhesion: 6, reach: 2.15, shadow: 2, contrast: .5,
+  adhesion: 6, reach: 2.15, shadow: 2, centerShadow: 2, centerRotation: 0, contrast: .5,
   softness: .32, blockSize: 24, spacing: 24, relief: 2, lightAngle: 360, rounding: 50,
   joinLobes: 0, rimCount: 0, rimOffset: 0,
   rimOffsetNoise: 0, rimNoiseX: 0, rimNoiseY: 0, rimSize: 24,
@@ -284,6 +320,7 @@ export const PUSH_MORPH_DEFAULTS: DitherFieldSettings = {
   adhesion: 3.8,
   reach: 2.8,
   shadow: 1.65,
+  centerShadow: 1.65,
   contrast: .72,
   neckEnd: 132,
   neckWaist: 34,
@@ -300,6 +337,7 @@ export const PUSH_MORPH_IMAGE_DEFAULTS: DitherFieldSettings = {
   adhesion: 6,
   reach: 2.2,
   shadow: .65,
+  centerShadow: .65,
   contrast: 1.15,
   softness: .65,
   blockSize: 15,
@@ -313,6 +351,7 @@ export const TYPE_AREA_FIELD_DEFAULTS: DitherFieldSettings = {
   ...PUSH_MORPH_IMAGE_DEFAULTS,
   reach: 1,
   shadow: .6,
+  centerShadow: .6,
   contrast: 1.25,
   softness: 1.65,
   relief: 0,
@@ -326,6 +365,7 @@ export const IMAGE_DITHER_DEFAULTS: DitherFieldSettings = {
   adhesion: 0,
   reach: 1,
   shadow: 1.15,
+  centerShadow: 1.15,
   contrast: 1.05,
   softness: .35,
   relief: .45,
@@ -335,10 +375,26 @@ export const IMAGE_MERGE_DEFAULTS: DitherFieldSettings = {
   adhesion: 4.4,
   reach: 2.6,
   shadow: 1.45,
+  centerShadow: 1.45,
   contrast: .92,
   softness: .55,
   joinLobes: 82,
   relief: .6,
+};
+export const MEDIA_PAIR_DEFAULTS: DitherFieldSettings = {
+  ...IMAGE_DITHER_DEFAULTS,
+  showGrid: true,
+  adhesion: .35,
+  reach: 1,
+  shadow: .55,
+  centerShadow: .55,
+  contrast: .88,
+  softness: .22,
+  blockSize: 32,
+  spacing: 32,
+  rounding: 48,
+  joinLobes: 85,
+  relief: .28,
 };
 
 /** Diameter of a grid LED as a fraction of the cell pitch. */
@@ -774,6 +830,30 @@ export function roundedGridUnionPath(
     path.lineTo(rounded[0].before.x,rounded[0].before.y);path.quadraticCurveTo(rounded[0].point.x,rounded[0].point.y,rounded[0].after.x,rounded[0].after.y);path.closePath();
   }
   return path;
+}
+
+export function drawMergeShapes(
+  context: CanvasRenderingContext2D,
+  groups: { cells: { column: number; row: number }[]; image: CanvasImageSource; tone: string; level: number }[],
+  stepX: number,
+  stepY: number,
+  size: number,
+  rounding: number,
+  joinLobes = 0,
+) {
+  const tiles: JoinedTile[] = [];
+  for (const group of groups) for (const cell of group.cells) {
+    tiles.push({
+      column: cell.column,
+      row: cell.row,
+      x: (cell.column + .5) * stepX,
+      y: (cell.row + .5) * stepY,
+      image: group.image,
+      tone: group.tone,
+      level: group.level,
+    });
+  }
+  drawJoinedTiles(context, tiles, stepX, stepY, size, rounding, joinLobes);
 }
 
 function drawJoinedTiles(
@@ -1443,15 +1523,16 @@ export function overlayDensityBox(
   center?: { x: number; y: number } | null,
   preserveImageBackground = false,
   size?: number,
+  scale?: { width?: number; height?: number },
 ) {
   const box = positionedOverlayPlacement(image, width, height, center, preserveImageBackground, size);
   const padX = box.width * .12, padY = box.height * .12;
-  return {
+  return scaleOccupancyBox({
     left: box.x - padX,
     top: box.y - padY,
     right: box.x + box.width + padX,
     bottom: box.y + box.height + padY,
-  };
+  }, scale?.width, scale?.height);
 }
 
 export function drawCenteredOverlay(

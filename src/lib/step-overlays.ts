@@ -1,4 +1,4 @@
-import type { DitherFieldSettings } from "./dither-cells";
+import { scaleOccupancyBox } from "./dither-cells";
 import { mapTypeLineBoxes, typeLinesOf, type TypeFace } from "./type-area";
 
 export type StepOverlaySpec = {
@@ -13,6 +13,8 @@ export type StepOverlaySpec = {
   typeBarHeight?: number;
   typeFace?: TypeFace;
   typeTrack?: number;
+  shadowWidth?: number;
+  shadowHeight?: number;
 };
 
 export type StepOverlay = {
@@ -56,11 +58,14 @@ export type SequenceStudio = SequenceTiming & {
   nextFigure?: CanvasImageSource;
   nextFigureSize?: number;
   nextSteps?: StepOverlaySpec[];
-  centerField?: DitherFieldSettings;
   typeBarWidth?: number;
   typeBarHeight?: number;
   nextTypeBarWidth?: number;
   nextTypeBarHeight?: number;
+  shadowWidth?: number;
+  shadowHeight?: number;
+  nextShadowWidth?: number;
+  nextShadowHeight?: number;
 };
 
 export const SEQUENCE_DEFAULTS: SequenceTiming = { delay: 1, appear: .4, gap: 1.2, fade: .2 };
@@ -226,10 +231,23 @@ export function stepCardBox(image: CanvasImageSource, width: number, height: num
   return placedOverlayLayout(source.width, source.height, width, height, cx, cy, size);
 }
 
-export function stepDensityBox(image: CanvasImageSource, width: number, height: number, cx: number, cy: number, size: number) {
+export function stepDensityBox(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  size: number,
+  scale?: { width?: number; height?: number },
+) {
   const box = stepCardBox(image, width, height, cx, cy, size);
   const padX = box.width * .12, padY = box.height * .12;
-  return { left: box.x - padX, top: box.y - padY, right: box.x + box.width + padX, bottom: box.y + box.height + padY };
+  return scaleOccupancyBox({
+    left: box.x - padX,
+    top: box.y - padY,
+    right: box.x + box.width + padX,
+    bottom: box.y + box.height + padY,
+  }, scale?.width, scale?.height);
 }
 
 function unionBoxes(boxes: { left: number; top: number; right: number; bottom: number }[]) {
@@ -248,6 +266,10 @@ function stepBarScale(step: StepOverlaySpec, fallback?: { barWidth?: number; bar
   };
 }
 
+function stepShadowScale(step: StepOverlaySpec) {
+  return { width: step.shadowWidth, height: step.shadowHeight };
+}
+
 export function stepOccupancyBoxes(
   image: CanvasImageSource,
   width: number,
@@ -256,6 +278,7 @@ export function stepOccupancyBoxes(
   cy: number,
   size: number,
   barScale?: { barWidth?: number; barHeight?: number },
+  shadowScale?: { width?: number; height?: number },
 ) {
   const lines = typeLinesOf(image);
   const placed = stepCardBox(image, width, height, cx, cy, size);
@@ -264,7 +287,7 @@ export function stepOccupancyBoxes(
     const sourceHeight = ("naturalHeight" in image && image.naturalHeight) || (image as { height: number }).height || 1;
     return mapTypeLineBoxes(lines, sourceWidth, sourceHeight, placed, barScale);
   }
-  return [stepDensityBox(image, width, height, cx, cy, size)];
+  return [stepDensityBox(image, width, height, cx, cy, size, shadowScale)];
 }
 
 function shiftedDensityBox(
@@ -297,7 +320,7 @@ export function appearingStepLinks(
   return steps.flatMap((step, index) => {
     const appear = states[index]?.appear ?? 0;
     if (appear <= 0) return [];
-    const boxes = stepOccupancyBoxes(step.image, width, height, step.cx, step.cy, step.size, stepBarScale(step, barScale))
+    const boxes = stepOccupancyBoxes(step.image, width, height, step.cx, step.cy, step.size, stepBarScale(step, barScale), stepShadowScale(step))
       .map(box => shiftedDensityBox(box, motionTime, index + bobIndexOffset, count, appear));
     return [{
       box: unionBoxes(boxes),
@@ -320,7 +343,7 @@ export function visibleStepLinks(
   return steps.flatMap((step, index) => {
     const appear = reducedMotion ? 1 : timing ? sequenceAppear(elapsed, index + 1, timing) : stepAppear(elapsed, index);
     if (appear <= 0) return [];
-    const boxes = stepOccupancyBoxes(step.image, width, height, step.cx, step.cy, step.size, stepBarScale(step, barScale))
+    const boxes = stepOccupancyBoxes(step.image, width, height, step.cx, step.cy, step.size, stepBarScale(step, barScale), stepShadowScale(step))
       .map(box => shiftedDensityBox(box, motionTime, index, steps.length, appear));
     return [{
       box: unionBoxes(boxes),
