@@ -13,6 +13,7 @@ export type StepOverlaySpec = {
   typeBarHeight?: number;
   typeFace?: TypeFace;
   typeTrack?: number;
+  typeColor?: string;
   shadowWidth?: number;
   shadowHeight?: number;
 };

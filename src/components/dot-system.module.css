@@ -38,11 +38,18 @@
 .pasteSetup button { width: 100%; margin-top: 6px; padding: 7px; border: 1px solid #111; background: #fff; color: #111; font: inherit; cursor: pointer; }
 .pasteSetup button:disabled { cursor: default; opacity: .4; }
 .pasteSetup p { margin: 6px 0 0; color: #666; }
+.exportActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.exportButton { border: 1px solid #111; background: #111; color: #fff; padding: 7px 12px; font: inherit; cursor: pointer; }
+.exportButton:hover { background: #333; }
+.exportActions p { margin: 0; font-size: 12px; color: #444; }
 .typeArea { display: grid; gap: 6px; margin: 0 0 12px; color: #111; }
 .typeArea textarea { box-sizing: border-box; width: 100%; min-height: 92px; padding: 7px; resize: vertical; border: 1px solid #b7b8b4; background: #fff; color: #111; font-size: 12px; line-height: 1.43; letter-spacing: -.05em; text-align: center; }
 .typeFace { display: flex; gap: 6px; margin: 0 0 10px; }
 .typeFace button { flex: 1; padding: 6px 8px; border: 1px solid #ccc; background: #fff; color: #333; font: inherit; cursor: pointer; }
 .typeFace button[aria-pressed="true"] { border-color: #111; background: #111; color: #fff; }
+.typeColor { display: grid; grid-template-columns: 1fr auto 72px; align-items: center; gap: 8px; margin: 0 0 10px; color: #111; }
+.typeColor input[type="color"] { width: 28px; height: 22px; padding: 0; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+.typeColor input[type="text"] { width: 72px; border: 1px solid #ccc; padding: 3px 5px; font: inherit; color: #111; }
 .typeSliders { display: grid; gap: 8px; margin: 0 0 12px; }
 .typeSize { display: grid; grid-template-columns: 1fr auto; gap: 2px; margin: 0; color: #111; }
 .typeSize output { color: #666; }

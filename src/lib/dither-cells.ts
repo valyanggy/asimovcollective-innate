@@ -988,6 +988,268 @@ export function rimOutwardVector(indices: Int16Array, columns: number, rows: num
   return { x: 0, y: 0 };
 }
 
+export type DitherSvgShape =
+  | { kind: "path"; d: string; fill: string }
+  | { kind: "circle"; cx: number; cy: number; r: number; fill: string };
+
+export type DitherExportPass = {
+  layers: OccupancyLayer[];
+  columns: number;
+  rows: number;
+  stepX: number;
+  stepY: number;
+  stamp: DitherStamp;
+  settings: DitherFieldSettings;
+  mergeUnderlayColor?: string;
+  toneGain?: number;
+};
+
+function toneFill(level: number) {
+  const ink = Math.round(17 + (255 - 17) * (1 - Math.max(0, Math.min(1, level))));
+  return `rgb(${ink},${ink},${ink})`;
+}
+
+function ringPathToSvg(ring: { x: number; y: number }[], joinRadius: number) {
+  if (ring.length < 3) return "";
+  const corners = ring.map((point, index) => {
+    const before = ring[(index + ring.length - 1) % ring.length];
+    const after = ring[(index + 1) % ring.length];
+    const beforeLength = Math.hypot(before.x - point.x, before.y - point.y);
+    const afterLength = Math.hypot(after.x - point.x, after.y - point.y);
+    const radius = Math.min(joinRadius * .45, beforeLength * .3, afterLength * .3);
+    return {
+      point,
+      before: { x: point.x + (before.x - point.x) / beforeLength * radius, y: point.y + (before.y - point.y) / beforeLength * radius },
+      after: { x: point.x + (after.x - point.x) / afterLength * radius, y: point.y + (after.y - point.y) / afterLength * radius },
+    };
+  });
+  const fmt = (value: number) => String(Math.round(value * 100) / 100);
+  let path = `M ${fmt(corners[0].after.x)} ${fmt(corners[0].after.y)}`;
+  for (let index = 1; index < corners.length; index++) {
+    const corner = corners[index];
+    path += ` L ${fmt(corner.before.x)} ${fmt(corner.before.y)} Q ${fmt(corner.point.x)} ${fmt(corner.point.y)} ${fmt(corner.after.x)} ${fmt(corner.after.y)}`;
+  }
+  path += ` L ${fmt(corners[0].before.x)} ${fmt(corners[0].before.y)} Q ${fmt(corners[0].point.x)} ${fmt(corners[0].point.y)} ${fmt(corners[0].after.x)} ${fmt(corners[0].after.y)} Z`;
+  return path;
+}
+
+function roundedGridUnionSvg(
+  cells: { column: number; row: number }[],
+  stepX: number,
+  stepY: number,
+  radius: number,
+  solidCells?: { column: number; row: number }[],
+) {
+  type GridEdge = { from: [number, number]; to: [number, number]; used: boolean };
+  const occupied = new Set(cells.map(cell => `${cell.column}:${cell.row}`));
+  const edges: GridEdge[] = [];
+  const solid = new Set((solidCells ?? cells).map(cell => `${cell.column}:${cell.row}`));
+  const has = (column: number, row: number) => occupied.has(`${column}:${row}`);
+  for (const { column, row } of cells) {
+    if (!has(column, row - 1)) edges.push({ from: [column, row], to: [column + 1, row], used: false });
+    if (!has(column + 1, row)) edges.push({ from: [column + 1, row], to: [column + 1, row + 1], used: false });
+    if (!has(column, row + 1)) edges.push({ from: [column + 1, row + 1], to: [column, row + 1], used: false });
+    if (!has(column - 1, row)) edges.push({ from: [column, row + 1], to: [column, row], used: false });
+  }
+  const starts = new Map<string, GridEdge[]>();
+  for (const edge of edges) {
+    const key = `${edge.from[0]}:${edge.from[1]}`;
+    starts.set(key, [...(starts.get(key) ?? []), edge]);
+  }
+  const direction = (edge: GridEdge) => edge.to[0] > edge.from[0] ? 0 : edge.to[1] > edge.from[1] ? 1 : edge.to[0] < edge.from[0] ? 2 : 3;
+  const fmt = (value: number) => String(Math.round(value * 100) / 100);
+  const parts: string[] = [];
+  for (const first of edges) {
+    if (first.used) continue;
+    const points: [number, number][] = [first.from];
+    let edge = first, guard = 0;
+    while (!edge.used && guard++ < edges.length + 1) {
+      edge.used = true;
+      points.push(edge.to);
+      if (edge.to[0] === first.from[0] && edge.to[1] === first.from[1]) break;
+      const candidates = (starts.get(`${edge.to[0]}:${edge.to[1]}`) ?? []).filter(candidate => !candidate.used);
+      if (!candidates.length) break;
+      const incoming = direction(edge), priority = [1, 0, 3, 2];
+      candidates.sort((a, b) => priority.indexOf((direction(a) - incoming + 4) % 4) - priority.indexOf((direction(b) - incoming + 4) % 4));
+      edge = candidates[0];
+    }
+    if (points.length < 4) continue;
+    points.pop();
+    const scaled = points.map(([x, y]) => ({ x: x * stepX, y: y * stepY, column: x, row: y }));
+    const rounded = scaled.map((point, index) => {
+      const previous = scaled[(index + scaled.length - 1) % scaled.length];
+      const next = scaled[(index + 1) % scaled.length];
+      const beforeLength = Math.hypot(previous.x - point.x, previous.y - point.y);
+      const afterLength = Math.hypot(next.x - point.x, next.y - point.y);
+      const r = Math.min(outerCornerRadius(point.column, point.row, solid, radius, occupied), beforeLength * .49, afterLength * .49);
+      return {
+        point,
+        before: { x: point.x + (previous.x - point.x) / beforeLength * r, y: point.y + (previous.y - point.y) / beforeLength * r },
+        after: { x: point.x + (next.x - point.x) / afterLength * r, y: point.y + (next.y - point.y) / afterLength * r },
+      };
+    });
+    let path = `M ${fmt(rounded[0].after.x)} ${fmt(rounded[0].after.y)}`;
+    for (let index = 1; index < rounded.length; index++) {
+      const corner = rounded[index];
+      path += ` L ${fmt(corner.before.x)} ${fmt(corner.before.y)} Q ${fmt(corner.point.x)} ${fmt(corner.point.y)} ${fmt(corner.after.x)} ${fmt(corner.after.y)}`;
+    }
+    path += ` L ${fmt(rounded[0].before.x)} ${fmt(rounded[0].before.y)} Q ${fmt(rounded[0].point.x)} ${fmt(rounded[0].point.y)} ${fmt(rounded[0].after.x)} ${fmt(rounded[0].after.y)} Z`;
+    parts.push(path);
+  }
+  return parts.join(" ");
+}
+
+function joinedCellsToSvg(
+  cells: { column: number; row: number }[],
+  stepX: number,
+  stepY: number,
+  size: number,
+  rounding: number,
+  joinLobes: number,
+  fill: string,
+  solidCells?: { column: number; row: number }[],
+): DitherSvgShape[] {
+  if (!cells.length) return [];
+  const joinRadius = joinLobeRadius(size, joinLobes);
+  const onGrid = Math.abs(size - stepX) < .5;
+  if (onGrid && joinRadius > 0) {
+    return smoothTileRings(cells, stepX, stepY, joinRadius)
+      .map(ring => ringPathToSvg(ring, joinRadius))
+      .filter(Boolean)
+      .map(d => ({ kind: "path" as const, d, fill }));
+  }
+  if (onGrid) {
+    const radius = size * Math.min(.5, rounding / 100);
+    const d = roundedGridUnionSvg(cells, stepX, stepY, radius, solidCells);
+    return d ? [{ kind: "path", d, fill }] : [];
+  }
+  const half = size / 2;
+  return cells.map(cell => ({
+    kind: "circle" as const,
+    cx: (cell.column + .5) * stepX,
+    cy: (cell.row + .5) * stepY,
+    r: half,
+    fill,
+  }));
+}
+
+function buildDitherIndices(
+  layers: OccupancyLayer[],
+  columns: number,
+  rows: number,
+  stepX: number,
+  stepY: number,
+  stamp: DitherStamp,
+  settings: DitherFieldSettings,
+  toneGain: number,
+) {
+  const levels = stamp.ramp?.map(cell => cell.level);
+  const indices = stamp.ramp?.length && levels ? new Int16Array(columns * rows).fill(-1) : null;
+  const mergeMask = indices ? new Uint8Array(columns * rows) : null;
+  const joins = stamp.ramp?.map(cell => Boolean(cell.joins)) ?? [];
+  if (indices && levels) {
+    for (let row = 0; row < rows; row++) for (let col = 0; col < columns; col++) {
+      const x = (col + .5) * stepX, y = (row + .5) * stepY;
+      const density = densityAt(layers, x, y, settings.adhesion) * settings.shadow;
+      const fringe = Math.max(0, Math.min(1, (density - .055) / .20));
+      if (!ditherHit(fringe * fringe * (3 - 2 * fringe), col, row)) continue;
+      const rawTone = shadedToneAt(layers, x, y, settings);
+      const tone = Math.min(1, rawTone * toneGain);
+      const cellIndex = row * columns + col;
+      if (mergeMask && rawTone >= .2) mergeMask[cellIndex] = 1;
+      indices[cellIndex] = toneCellIndex(tone, col, row, levels, joins);
+    }
+    weldJoiningIndices(indices, joins, columns, rows);
+  }
+  return { indices, mergeMask, levels, joins };
+}
+
+export function buildDitherPlacement(
+  layers: OccupancyLayer[],
+  columns: number,
+  rows: number,
+  stepX: number,
+  stepY: number,
+  stamp: DitherStamp,
+  settings?: DitherFieldSettings,
+  mergeUnderlayColor?: string,
+  toneGain = 1,
+): DitherSvgShape[] {
+  if (!settings) return [];
+  const radius = settings.blockSize / 2;
+  const size = radius * 2;
+  const { indices, mergeMask, levels, joins } = buildDitherIndices(layers, columns, rows, stepX, stepY, stamp, settings, toneGain);
+  const shapes: DitherSvgShape[] = [];
+  if (mergeMask && mergeUnderlayColor && Math.abs(size - stepX) < .5 && Math.abs(size - stepY) < .5) {
+    const cells: { column: number; row: number }[] = [];
+    for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+      if (mergeMask[row * columns + column]) cells.push({ column, row });
+    }
+    shapes.push(...joinedCellsToSvg(cells, stepX, stepY, size, settings.rounding, settings.joinLobes ?? 0, mergeUnderlayColor));
+  }
+  if (indices && stamp.ramp?.length && levels) {
+    const joined = new Map<string, { column: number; row: number }[]>();
+    for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+      const index = indices[row * columns + column];
+      if (index < 0 || !stamp.ramp[index].joins) continue;
+      const cell = stamp.ramp[index];
+      const group = joined.get(cell.id);
+      const entry = { column, row };
+      if (group) group.push(entry);
+      else joined.set(cell.id, [entry]);
+    }
+    for (const [tone, cells] of joined) {
+      const cell = stamp.ramp.find(item => item.id === tone);
+      if (!cell) continue;
+      shapes.push(...joinedCellsToSvg(cells, stepX, stepY, size, settings.rounding, settings.joinLobes ?? 0, toneFill(cell.level), cells));
+    }
+    for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+      const index = indices[row * columns + column];
+      if (index < 0) continue;
+      const cell = stamp.ramp[index];
+      if (cell.joins) continue;
+      shapes.push({
+        kind: "circle",
+        cx: (column + .5) * stepX,
+        cy: (row + .5) * stepY,
+        r: radius,
+        fill: toneFill(cell.level),
+      });
+    }
+    if (stamp.rim?.length && (settings.rimCount ?? 0) > 0) {
+      const selected = selectRimCells(rimCandidateCells(indices, columns, rows), settings.rimCount ?? 0);
+      const drawSize = Math.max(1, settings.rimSize || size);
+      const half = drawSize / 2;
+      for (const rimCell of selected) {
+        const block = stamp.rim[rimHash(rimCell) % stamp.rim.length];
+        const outward = rimOutwardVector(indices, columns, rows, rimCell);
+        const distance = (settings.rimOffset ?? 0) + rimJitter(rimCell, settings.rimOffsetNoise ?? 0, 17);
+        shapes.push({
+          kind: "circle",
+          cx: (rimCell.column + .5) * stepX + outward.x * distance + rimJitter(rimCell, settings.rimNoiseX ?? 0, 31),
+          cy: (rimCell.row + .5) * stepY + outward.y * distance + rimJitter(rimCell, settings.rimNoiseY ?? 0, 47),
+          r: half,
+          fill: toneFill(block.level),
+        });
+      }
+    }
+    return shapes;
+  }
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    const x = (column + .5) * stepX, y = (row + .5) * stepY;
+    if (!ditherHit(occupancyAt(layers, x, y, settings), column, row)) continue;
+    shapes.push({ kind: "circle", cx: x, cy: y, r: radius, fill: INK });
+  }
+  return shapes;
+}
+
+export function serializeDitherToSvg(shapes: DitherSvgShape[], width: number, height: number) {
+  const body = shapes.map(shape => shape.kind === "path"
+    ? `<path d="${shape.d}" fill="${shape.fill}"/>`
+    : `<circle cx="${shape.cx}" cy="${shape.cy}" r="${shape.r}" fill="${shape.fill}"/>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n${body}\n</svg>`;
+}
+
 function drawRimBlocks(
   context: CanvasRenderingContext2D,
   indices: Int16Array,
@@ -1035,28 +1297,11 @@ export function drawDitheredOccupancy(
   toneGain = 1,
 ) {
   const radius = settings ? settings.blockSize / 2 : Math.min(stepX, stepY) * .42;
-  const levels = stamp.ramp?.map(cell => cell.level);
   const counts = stamp.ramp ? stamp.ramp.map(() => 0) : null;
-  const indices = stamp.ramp?.length && settings && levels ? new Int16Array(columns * rows).fill(-1) : null;
-  const mergeMask = mergeUnderlayColor && indices ? new Uint8Array(columns * rows) : null;
-  if (indices && settings && levels) {
-    for (let row = 0; row < rows; row++) for (let col = 0; col < columns; col++) {
-      const x = (col + .5) * stepX, y = (row + .5) * stepY;
-      const density = densityAt(layers, x, y, settings.adhesion) * settings.shadow;
-      // Highlights belong to the fringe of a domain, never to empty canvas.
-      const fringe = Math.max(0, Math.min(1, (density - .055) / .20));
-      if (!ditherHit(fringe * fringe * (3 - 2 * fringe), col, row)) continue;
-      const rawTone = shadedToneAt(layers, x, y, settings);
-      const tone = Math.min(1, rawTone * toneGain);
-      const cellIndex = row * columns + col;
-      // Keep sparse highlight marks free; the denser letter cells share one liquid silhouette.
-      if (mergeMask && rawTone >= .2) mergeMask[cellIndex] = 1;
-      indices[cellIndex] = toneCellIndex(
-        tone, col, row, levels, stamp.ramp!.map(cell => Boolean(cell.joins)),
-      );
-    }
-    weldJoiningIndices(indices, stamp.ramp!.map(cell => Boolean(cell.joins)), columns, rows);
-  }
+  const built = settings ? buildDitherIndices(layers, columns, rows, stepX, stepY, stamp, settings, toneGain) : null;
+  const indices = built?.indices ?? null;
+  const mergeMask = mergeUnderlayColor && indices ? built?.mergeMask ?? null : null;
+  const levels = built?.levels;
   const ratio = Math.max(1, Math.abs(context.getTransform().a));
   const joined: JoinedTile[] = [];
   if (mergeMask && settings && Math.abs(radius * 2 - stepX) < .5 && Math.abs(radius * 2 - stepY) < .5) {

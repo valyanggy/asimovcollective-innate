@@ -11,6 +11,7 @@ export const TYPE_AREA_LINE = 1.43;
 export const TYPE_AREA_TRACK = -.05;
 export const TYPE_AREA_TRACK_MIN = -.15;
 export const TYPE_AREA_TRACK_MAX = .2;
+export const TYPE_AREA_COLOR = "#ffffff";
 export const TYPE_AREA_FIELD = .36;
 export const TYPE_AREA_FIELD_MIN = .14;
 export const TYPE_AREA_FIELD_MAX = .78;
@@ -47,9 +48,15 @@ export function wrapTypeLines(text: string, measure: (line: string) => number, m
   return lines.length ? lines : [""];
 }
 
-function prepareTypeContext(context: CanvasRenderingContext2D, fontSize: number, face: TypeFace = TYPE_AREA_FACE, track = TYPE_AREA_TRACK) {
+function prepareTypeContext(
+  context: CanvasRenderingContext2D,
+  fontSize: number,
+  face: TypeFace = TYPE_AREA_FACE,
+  track = TYPE_AREA_TRACK,
+  color = TYPE_AREA_COLOR,
+) {
   context.font = `${fontSize}px ${face}, Arial, sans-serif`;
-  context.fillStyle = "#ffffff";
+  context.fillStyle = color;
   context.textAlign = "center";
   context.textBaseline = "top";
   context.letterSpacing = `${fontSize * track}px`;
@@ -79,9 +86,14 @@ export function clampTypeTrack(value: number) {
   return Math.max(TYPE_AREA_TRACK_MIN, Math.min(TYPE_AREA_TRACK_MAX, Math.round(value * 1000) / 1000));
 }
 
-export type TypeStyle = { face?: TypeFace; track?: number };
+export function clampTypeColor(value: unknown) {
+  if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim())) return value.trim();
+  return TYPE_AREA_COLOR;
+}
 
-export type TypeBlockSpec = { copy: string; fontSize: number; fieldWidth: number; cx: number; cy: number; barWidth?: number; barHeight?: number; face?: TypeFace; track?: number };
+export type TypeStyle = { face?: TypeFace; track?: number; color?: string };
+
+export type TypeBlockSpec = { copy: string; fontSize: number; fieldWidth: number; cx: number; cy: number; barWidth?: number; barHeight?: number; face?: TypeFace; track?: number; color?: string };
 
 export type TypeSetupImage = {
   name?: string;
@@ -94,6 +106,7 @@ export type TypeSetupImage = {
   typeBarHeight?: number;
   typeFace?: TypeFace;
   typeTrack?: number;
+  typeColor?: string;
   shadowWidth?: number;
   shadowHeight?: number;
 };
@@ -110,6 +123,7 @@ export function typeBlockFromSetup(image: TypeSetupImage): TypeBlockSpec | null 
     barHeight: image.typeBarHeight,
     face: image.typeFace,
     track: image.typeTrack,
+    color: image.typeColor,
   };
 }
 
@@ -135,6 +149,7 @@ export function renderTypeBlock(copy: string, fontSize: number, fieldWidth: numb
     fieldWidth: Math.round(clampTypeField(fieldWidth) * Math.max(200, stageWidth)),
     face: style.face,
     track: style.track,
+    color: style.color,
   });
 }
 
@@ -231,16 +246,17 @@ export function typeLineMergeScale(boxes: TypeBox[], merge: number) {
 }
 
 /** Paint a transparent type block. Field width controls wrapping; font size stays independent. */
-export function renderTypeArea(text: string, options: { fontSize?: number; fieldWidth?: number; face?: TypeFace; track?: number } = {}): HTMLCanvasElement {
+export function renderTypeArea(text: string, options: { fontSize?: number; fieldWidth?: number; face?: TypeFace; track?: number; color?: string } = {}): HTMLCanvasElement {
   const fontSize = options.fontSize ?? TYPE_AREA_FONT;
   const face = clampTypeFace(options.face);
   const track = clampTypeTrack(options.track ?? TYPE_AREA_TRACK);
+  const color = clampTypeColor(options.color);
   const pad = typeFieldPad(fontSize);
   const width = Math.max(Math.round(fontSize * 3), Math.round(options.fieldWidth ?? TYPE_AREA_WIDTH));
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   if (!context) return canvas;
-  prepareTypeContext(context, fontSize, face, track);
+  prepareTypeContext(context, fontSize, face, track, color);
   const measure = (line: string) => context.measureText(line).width;
   const lines = wrapTypeLines(text, measure, Math.max(fontSize, width - pad * 2));
   const metrics = typeLineMetrics(lines, fontSize, width, pad, measure);
@@ -251,7 +267,7 @@ export function renderTypeArea(text: string, options: { fontSize?: number; field
   canvas.dataset.typeLines = JSON.stringify(metrics);
   TYPE_LINES.set(canvas, metrics);
   context.clearRect(0, 0, canvas.width, canvas.height);
-  prepareTypeContext(context, fontSize, face, track);
+  prepareTypeContext(context, fontSize, face, track, color);
   lines.forEach((line, index) => {
     context.fillText(line, width / 2, pad + index * lineHeight);
   });

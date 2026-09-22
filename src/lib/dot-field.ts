@@ -854,9 +854,34 @@ function blurRingBackdrop(canvas: HTMLCanvasElement, width: number, height: numb
   return backdrop;
 }
 
-export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, headlinePosition?: Point | null, rectangular = false, objectPositions?: (Point | null)[], linkage?: LinkageSettings, dither?: DitherStamp, ditherSettings: DitherFieldSettings = DITHER_FIELD_DEFAULTS, trails?: TrailSettings, figure?: CanvasImageSource, steps?: StepOverlaySpec[], stepDither?: DitherStamp, neckDither?: DitherStamp, figureMorph = false, gridOnly = false, figurePosition?: Point | null, editableFigures = false, figureSize = .158, sequence?: (SequenceStudio & { playing?: boolean }) | null, ditherImage = false, imageMerge = false): DotFieldLayout | undefined {
-  const bounds = canvas.getBoundingClientRect();
+export type DotFieldDrawOptions = {
+  exportShape?: boolean;
+  width?: number;
+  height?: number;
+  exportPasses?: import("./dither-cells").DitherExportPass[];
+};
+
+export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, headlinePosition?: Point | null, rectangular = false, objectPositions?: (Point | null)[], linkage?: LinkageSettings, dither?: DitherStamp, ditherSettings: DitherFieldSettings = DITHER_FIELD_DEFAULTS, trails?: TrailSettings, figure?: CanvasImageSource, steps?: StepOverlaySpec[], stepDither?: DitherStamp, neckDither?: DitherStamp, figureMorph = false, gridOnly = false, figurePosition?: Point | null, editableFigures = false, figureSize = .158, sequence?: (SequenceStudio & { playing?: boolean }) | null, ditherImage = false, imageMerge = false, drawOptions?: DotFieldDrawOptions): DotFieldLayout | undefined {
+  const boundsRect = canvas.getBoundingClientRect();
+  const bounds = drawOptions?.width && drawOptions?.height
+    ? { width: drawOptions.width, height: drawOptions.height }
+    : boundsRect;
   if (!bounds.width || !bounds.height) return;
+  const exportShape = Boolean(drawOptions?.exportShape);
+  const recordPass = (layers: OccupancyLayer[], stampColumns: number, stampRows: number, spacing: number, stamp: DitherStamp, settings: DitherFieldSettings, mergeUnderlayColor?: string, toneGain = 1) => {
+    if (!drawOptions?.exportPasses) return;
+    drawOptions.exportPasses.push({
+      layers,
+      columns: stampColumns,
+      rows: stampRows,
+      stepX: spacing,
+      stepY: spacing,
+      stamp,
+      settings,
+      mergeUnderlayColor,
+      toneGain,
+    });
+  };
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
   const pixelWidth = Math.round(bounds.width * ratio), pixelHeight = Math.round(bounds.height * ratio);
   if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
@@ -864,8 +889,11 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas is unavailable.");
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, bounds.width, bounds.height);
+  if (exportShape) context.clearRect(0, 0, bounds.width, bounds.height);
+  else {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, bounds.width, bounds.height);
+  }
   if (gridOnly) {
     const { columns, rows, stepX, stepY } = gridMetrics(bounds.width, bounds.height, 1.5);
     drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
@@ -888,7 +916,7 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
   }
   if (dither && figure) {
     const { columns, rows, stepX, stepY } = gridMetrics(bounds.width, bounds.height);
-    drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
+    if (!exportShape) drawLedOccupancy(context, emptyOccupancy(), columns, rows, stepX, stepY, ditherSettings);
     if (ditherImage) {
       const layer = imageDitherLayer(figure, bounds.width, bounds.height, figurePosition, figureSize);
       const layers = imageMerge
@@ -992,12 +1020,19 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
           return bridge ? [bridge] : [];
         }) : [];
         const sharedLayers = [...(centerLayer ? [centerLayer] : []), ...stepLayers, ...morphLayers];
-        if (sharedLayers.length) drawDitheredOccupancy(context, sharedLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        if (sharedLayers.length) {
+          recordPass(sharedLayers, stampColumns, stampRows, spacing, dither, ditherSettings);
+          drawDitheredOccupancy(context, sharedLayers, stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        }
         canvas.dataset.morphLinks = String(morphLayers.length);
       } else {
         delete canvas.dataset.morphLinks;
-        if (centerLayer) drawDitheredOccupancy(context, [centerLayer], stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        if (centerLayer) {
+          recordPass([centerLayer], stampColumns, stampRows, spacing, dither, ditherSettings);
+          drawDitheredOccupancy(context, [centerLayer], stampColumns, stampRows, spacing, spacing, dither, ditherSettings);
+        }
         if (stepLayers.length && stepDither?.ramp?.length) {
+          recordPass(stepLayers, stampColumns, stampRows, spacing, stepDither, ditherSettings);
           drawDitheredOccupancy(context, stepLayers, stampColumns, stampRows, spacing, spacing, stepDither, ditherSettings);
         }
         const neckLayers = chat > 0 ? stepLinks.flatMap((link) => {
@@ -1009,19 +1044,22 @@ export function drawDotField(canvas: HTMLCanvasElement, seed: number, time = 0, 
           return bridge ? [bridge] : [];
         }) : [];
         if (neckLayers.length && neckDither?.ramp?.length) {
+          recordPass(neckLayers, stampColumns, stampRows, spacing, neckDither, { ...ditherSettings, adhesion: 0 });
           drawDitheredOccupancy(context, neckLayers, stampColumns, stampRows, spacing, spacing, neckDither,
             { ...ditherSettings, adhesion: 0 });
         }
       }
     }
-    if (overlayState) {
-      if (centerFrom > 0) drawCenteredOverlay(context, figure, bounds.width, bounds.height, centerFrom, figurePosition, editableFigures, figureSize);
-      if (centerTo > 0 && nextFigure) drawCenteredOverlay(context, nextFigure, bounds.width, bounds.height, centerTo, figurePosition, editableFigures, nextSize);
-      drawAppearingOverlays(context, steps ?? [], bounds.width, bounds.height, overlayState.first.map(step => step.appear), editableFigures, time, 0, idleCount);
-      drawAppearingOverlays(context, nextSteps, bounds.width, bounds.height, overlayState.second.map(step => step.appear), editableFigures, time, steps?.length ?? 0, idleCount);
-    } else {
-      drawCenteredOverlay(context, figure, bounds.width, bounds.height, chat, figurePosition, editableFigures, figureSize);
-      if (steps?.length) drawStepOverlays(context, steps, bounds.width, bounds.height, elapsed, fullyVisible, editableFigures, timing, time);
+    if (!exportShape) {
+      if (overlayState) {
+        if (centerFrom > 0) drawCenteredOverlay(context, figure, bounds.width, bounds.height, centerFrom, figurePosition, editableFigures, figureSize);
+        if (centerTo > 0 && nextFigure) drawCenteredOverlay(context, nextFigure, bounds.width, bounds.height, centerTo, figurePosition, editableFigures, nextSize);
+        drawAppearingOverlays(context, steps ?? [], bounds.width, bounds.height, overlayState.first.map(step => step.appear), editableFigures, time, 0, idleCount);
+        drawAppearingOverlays(context, nextSteps, bounds.width, bounds.height, overlayState.second.map(step => step.appear), editableFigures, time, steps?.length ?? 0, idleCount);
+      } else {
+        drawCenteredOverlay(context, figure, bounds.width, bounds.height, chat, figurePosition, editableFigures, figureSize);
+        if (steps?.length) drawStepOverlays(context, steps, bounds.width, bounds.height, elapsed, fullyVisible, editableFigures, timing, time);
+      }
     }
     const showSecondObjects = previewSecond || Boolean(overlayState && overlayState.first.every(step => step.appear <= 0)
       && (overlayState.centerTo >= 1 || overlayState.second.some(step => step.appear > 0)));

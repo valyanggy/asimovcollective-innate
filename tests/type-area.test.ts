@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampTypeBar, clampTypeFace, clampTypeField, clampTypeFont, clampTypeTrack, mapTypeLineBoxes, nearestTypeBox, typeBlockFromSetup, typeBlockLabel, typeLineMergeScale, typeLineMetrics, wrapTypeLines, TYPE_AREA_DEFAULT, TYPE_AREA_TRACK, TYPE_SURROUND_DEFAULTS } from "../src/lib/type-area";
+import { clampTypeBar, clampTypeColor, clampTypeFace, clampTypeField, clampTypeFont, clampTypeTrack, mapTypeLineBoxes, nearestTypeBox, typeBlockFromSetup, typeBlockLabel, typeLineMergeScale, typeLineMetrics, wrapTypeLines, TYPE_AREA_COLOR, TYPE_AREA_DEFAULT, TYPE_AREA_TRACK, TYPE_SURROUND_DEFAULTS } from "../src/lib/type-area";
 
 test("wrapTypeLines keeps author breaks and wraps long lines", () => {
   const measure = (line: string) => line.length;
@@ -28,6 +28,8 @@ test("type size and field width stay in range", () => {
   assert.equal(clampTypeTrack(-.2), -.15);
   assert.equal(clampTypeTrack(TYPE_AREA_TRACK), -.05);
   assert.equal(clampTypeTrack(.4), .2);
+  assert.equal(clampTypeColor("#0300cc"), "#0300cc");
+  assert.equal(clampTypeColor("bad"), TYPE_AREA_COLOR);
 });
 
 test("type block labels stay short", () => {
@@ -53,6 +55,7 @@ test("setup images restore every type slot, not just the center", () => {
     typeBarHeight: 1.81,
     typeFace: "Algebra",
     typeTrack: .08,
+    typeColor: "#0300cc",
   });
   assert.ok(sense);
   assert.equal(sense.copy, "Hey Cosmo");
@@ -64,6 +67,7 @@ test("setup images restore every type slot, not just the center", () => {
   assert.equal(sense.barHeight, 1.81);
   assert.equal(sense.face, "Algebra");
   assert.equal(sense.track, .08);
+  assert.equal(sense.color, "#0300cc");
 });
 
 test("type occupancy is one slab per line with leading left empty", () => {

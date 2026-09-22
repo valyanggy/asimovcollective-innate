@@ -7,7 +7,7 @@ import type { DotFieldLayout } from "@/lib/dot-field";
 import { clampShadowSize, DITHER_FIELD_DEFAULTS, FIGURE_LED_DEFAULTS, IMAGE_DITHER_DEFAULTS, IMAGE_MERGE_DEFAULTS, MEDIA_PAIR_DEFAULTS, PUSH_MORPH_DEFAULTS, PUSH_MORPH_IMAGE_DEFAULTS, SHADOW_SIZE_DEFAULT, SHADOW_SIZE_MAX, SHADOW_SIZE_MIN, TYPE_AREA_FIELD_DEFAULTS, MORPH_0918_LIBRARY, MORPH_LIBRARY, NECK_LIBRARY, STEP_LIBRARY, TONAL_LIBRARY, type DitherStamp } from "@/lib/dither-cells";
 import { clampMediaWipe, MEDIA_BLEED_DEFAULT, MEDIA_BLEED_MAX, MEDIA_BLEED_MIN, MEDIA_PAIR_WIPE_DEFAULT, MEDIA_RANDOM_DEFAULT, MEDIA_RANDOM_MAX, MEDIA_RANDOM_MIN } from "@/lib/media-pair";
 import { replayStepSequence, MORPH_IMAGE_OVERLAYS, SEQUENCE_DEFAULTS, STEP_OVERLAYS, type SequenceStudio, type SequenceTiming, type StepOverlaySpec } from "@/lib/step-overlays";
-import { clampTypeBar, clampTypeFace, clampTypeField, clampTypeFont, clampTypeTrack, renderTypeArea, renderTypeBlock, typeBlockFromSetup, typeBlockLabel, TYPE_AREA_ACT2, TYPE_AREA_ACT2_BAR_HEIGHT, TYPE_AREA_ACT2_BAR_WIDTH, TYPE_AREA_ACT2_FONT, TYPE_AREA_ANCHOR, TYPE_AREA_BAR_HEIGHT, TYPE_AREA_BAR_HEIGHT_MAX, TYPE_AREA_BAR_MAX, TYPE_AREA_BAR_MIN, TYPE_AREA_BAR_WIDTH, TYPE_AREA_DEFAULT, TYPE_AREA_FACE, TYPE_AREA_FACES, TYPE_AREA_FIELD, TYPE_AREA_FONT, TYPE_AREA_FONT_MAX, TYPE_AREA_FONT_MIN, TYPE_AREA_TRACK, TYPE_AREA_TRACK_MAX, TYPE_AREA_TRACK_MIN, TYPE_SURROUND_ACT2, TYPE_SURROUND_DEFAULTS, type TypeBlockSpec, type TypeFace, type TypeSetupImage, type TypeStyle } from "@/lib/type-area";
+import { clampTypeBar, clampTypeColor, clampTypeFace, clampTypeField, clampTypeFont, clampTypeTrack, renderTypeArea, renderTypeBlock, typeBlockFromSetup, typeBlockLabel, TYPE_AREA_ACT2, TYPE_AREA_ACT2_BAR_HEIGHT, TYPE_AREA_ACT2_BAR_WIDTH, TYPE_AREA_ACT2_FONT, TYPE_AREA_ANCHOR, TYPE_AREA_BAR_HEIGHT, TYPE_AREA_BAR_HEIGHT_MAX, TYPE_AREA_BAR_MAX, TYPE_AREA_BAR_MIN, TYPE_AREA_BAR_WIDTH, TYPE_AREA_COLOR, TYPE_AREA_DEFAULT, TYPE_AREA_FACE, TYPE_AREA_FACES, TYPE_AREA_FIELD, TYPE_AREA_FONT, TYPE_AREA_FONT_MAX, TYPE_AREA_FONT_MIN, TYPE_AREA_TRACK, TYPE_AREA_TRACK_MAX, TYPE_AREA_TRACK_MIN, TYPE_SURROUND_ACT2, TYPE_SURROUND_DEFAULTS, type TypeBlockSpec, type TypeFace, type TypeSetupImage, type TypeStyle } from "@/lib/type-area";
 import styles from "./dot-system.module.css";
 import { CellLibrary, RimBlockSet, ToneRamp } from "./cell-library";
 import { TrailControls } from "./trail-controls";
@@ -15,6 +15,7 @@ import { TRAIL_DEFAULTS } from "@/lib/domain-trails";
 import { DitherControls } from "./dither-controls";
 import { DendriticControls } from "./dendritic-layer";
 import { LINKAGE_DEFAULTS } from "@/lib/component-linkage";
+import { exportFieldPng, exportFieldSvg, type FieldExportDraw } from "@/lib/field-export";
 
 const EMPTY_OVERLAYS: typeof MORPH_IMAGE_OVERLAYS = [];
 
@@ -28,10 +29,11 @@ function defaultFigureAnchor(bounds: { width: number; height: number }, ditherIm
   return { x: bounds.width * .489, y: bounds.height * .442 };
 }
 
-function typeStyleOf(step: { typeFace?: TypeFace; typeTrack?: number; face?: TypeFace; track?: number }): TypeStyle {
+function typeStyleOf(step: { typeFace?: TypeFace; typeTrack?: number; typeColor?: string; face?: TypeFace; track?: number; color?: string }): TypeStyle {
   return {
     face: clampTypeFace(step.typeFace ?? step.face),
     track: clampTypeTrack(step.typeTrack ?? step.track ?? TYPE_AREA_TRACK),
+    color: clampTypeColor(step.typeColor ?? step.color),
   };
 }
 
@@ -49,6 +51,7 @@ function makeTypeStep(spec: TypeBlockSpec, stage: number): StepOverlaySpec {
     typeBarHeight: clampTypeBar(spec.barHeight ?? TYPE_AREA_BAR_HEIGHT, TYPE_AREA_BAR_HEIGHT_MAX),
     typeFace: style.face,
     typeTrack: style.track,
+    typeColor: style.color,
   };
 }
 
@@ -69,7 +72,7 @@ function loadOverlayImage(file: File): Promise<{ image: HTMLImageElement; label:
   });
 }
 
-export function DotSystem({ rectangular = false, multiple = false, neurons = false, dither = false, figure, pushMorph = false, gridOnly = false, editableImages = false, sequenceStudio = false, ditherImage = false, imageMerge = false, typeArea = false, mediaPair = false }: { rectangular?: boolean; multiple?: boolean; neurons?: boolean; dither?: boolean; figure?: string; pushMorph?: boolean; gridOnly?: boolean; editableImages?: boolean; sequenceStudio?: boolean; ditherImage?: boolean; imageMerge?: boolean; typeArea?: boolean; mediaPair?: boolean }) {
+export function DotSystem({ rectangular = false, multiple = false, neurons = false, dither = false, figure, pushMorph = false, gridOnly = false, editableImages = false, sequenceStudio = false, ditherImage = false, imageMerge = false, typeArea = false, typeAreaExport = false, mediaPair = false }: { rectangular?: boolean; multiple?: boolean; neurons?: boolean; dither?: boolean; figure?: string; pushMorph?: boolean; gridOnly?: boolean; editableImages?: boolean; sequenceStudio?: boolean; ditherImage?: boolean; imageMerge?: boolean; typeArea?: boolean; typeAreaExport?: boolean; mediaPair?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const seed = useRef<number | null>(null);
   const layout = useRef<DotFieldLayout | null>(null);
@@ -85,6 +88,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
   const resizeDrag = useRef<{ pointer: number; distance: number; size: number } | null>(null);
   const [error, setError] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+  const [exportStatus, setExportStatus] = useState("");
   const [pasteStatus, setPasteStatus] = useState("");
   const [pastedSetup, setPastedSetup] = useState("");
   const [mainImageLabel, setMainImageLabel] = useState(mediaPair ? "innate-plant-cutout.jpg" : ditherImage ? "intelligence.png" : typeArea ? "Type area" : editableImages ? "1.png" : "innate-os-card.png");
@@ -105,12 +109,14 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
   const [typeBarHeight, setTypeBarHeight] = useState(TYPE_AREA_BAR_HEIGHT);
   const [typeFace, setTypeFace] = useState<TypeFace>(TYPE_AREA_FACE);
   const [typeTrack, setTypeTrack] = useState(TYPE_AREA_TRACK);
+  const [typeColor, setTypeColor] = useState(TYPE_AREA_COLOR);
   const [nextTypeCopy, setNextTypeCopy] = useState(typeArea ? TYPE_AREA_ACT2 : "");
   const [nextTypeFontSize, setNextTypeFontSize] = useState(TYPE_AREA_ACT2_FONT);
   const [nextTypeBarWidth, setNextTypeBarWidth] = useState(TYPE_AREA_ACT2_BAR_WIDTH);
   const [nextTypeBarHeight, setNextTypeBarHeight] = useState(TYPE_AREA_ACT2_BAR_HEIGHT);
   const [nextTypeFace, setNextTypeFace] = useState<TypeFace>(TYPE_AREA_FACE);
   const [nextTypeTrack, setNextTypeTrack] = useState(TYPE_AREA_TRACK);
+  const [nextTypeColor, setNextTypeColor] = useState(TYPE_AREA_COLOR);
   const [nextCenterIsType, setNextCenterIsType] = useState(typeArea);
   const [typeEdit, setTypeEdit] = useState<{ act: 1 | 2; slot: "center" | number }>({ act: 1, slot: "center" });
   const [shadowWidth, setShadowWidth] = useState(SHADOW_SIZE_DEFAULT);
@@ -207,11 +213,11 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       if (cancelled) return;
       const stage = canvas.current?.getBoundingClientRect().width || stageWidth || 1000;
       if (centerIsType) {
-        setFigureImage(renderTypeArea(typeCopy, { fontSize: typeFontSize, fieldWidth: Math.round(typeFieldWidth * stage), face: typeFace, track: typeTrack }));
+        setFigureImage(renderTypeArea(typeCopy, { fontSize: typeFontSize, fieldWidth: Math.round(typeFieldWidth * stage), face: typeFace, track: typeTrack, color: typeColor }));
         setMainImageLabel(typeBlockLabel(typeCopy));
       }
       if (nextCenterIsType) {
-        const image = renderTypeArea(nextTypeCopy, { fontSize: nextTypeFontSize, fieldWidth: Math.round(nextImageSize * stage), face: nextTypeFace, track: nextTypeTrack });
+        const image = renderTypeArea(nextTypeCopy, { fontSize: nextTypeFontSize, fieldWidth: Math.round(nextImageSize * stage), face: nextTypeFace, track: nextTypeTrack, color: nextTypeColor });
         nextFigureRef.current = image;
         setNextFigureImage(image);
         setNextImageLabel(nextTypeCopy.trim() ? typeBlockLabel(nextTypeCopy) : "Empty");
@@ -228,7 +234,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     if (document.fonts?.load) void Promise.all(TYPE_AREA_FACES.map(face => document.fonts.load(`${typeFontSize}px ${face}`))).finally(paint);
     else paint();
     return () => { cancelled = true; };
-  }, [typeArea, typeCopy, centerIsType, typeFontSize, typeFieldWidth, stageWidth, nextCenterIsType, nextTypeCopy, nextTypeFontSize, nextImageSize, typeFace, typeTrack, nextTypeFace, nextTypeTrack]);
+  }, [typeArea, typeCopy, centerIsType, typeFontSize, typeFieldWidth, stageWidth, nextCenterIsType, nextTypeCopy, nextTypeFontSize, nextImageSize, typeFace, typeTrack, typeColor, nextTypeFace, nextTypeTrack, nextTypeColor]);
 
   useEffect(() => {
     if (!figure || ditherImage || typeArea) { if (!typeArea) setStepImages([]); return; }
@@ -398,6 +404,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       setTypeBarHeight(TYPE_AREA_BAR_HEIGHT);
       setTypeFace(TYPE_AREA_FACE);
       setTypeTrack(TYPE_AREA_TRACK);
+      setTypeColor(TYPE_AREA_COLOR);
       setNextCenterIsType(true);
       setNextTypeCopy(TYPE_AREA_ACT2);
       setNextTypeFontSize(TYPE_AREA_ACT2_FONT);
@@ -405,6 +412,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       setNextTypeBarHeight(TYPE_AREA_ACT2_BAR_HEIGHT);
       setNextTypeFace(TYPE_AREA_FACE);
       setNextTypeTrack(TYPE_AREA_TRACK);
+      setNextTypeColor(TYPE_AREA_COLOR);
       nextImageSizeRef.current = TYPE_AREA_FIELD;
       setNextImageSize(TYPE_AREA_FIELD);
       setStepImages(TYPE_SURROUND_DEFAULTS.map(spec => makeTypeStep(spec, stage)));
@@ -747,7 +755,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     const percent = (value: number) => Math.round(value * 1000) / 10;
     const preset = {
       version: 1,
-      study: typeArea ? "10_text area" : sequenceStudio ? "10_5" : "10_4",
+      study: typeAreaExport ? "Text Area_export" : typeArea ? "10_text area" : sequenceStudio ? "10_5" : "10_4",
       typeCopy: typeArea && centerIsType ? typeCopy : undefined,
       typeFontSize: typeArea && centerIsType ? typeFontSize : undefined,
       typeFieldWidth: typeArea && centerIsType ? typeFieldWidth : undefined,
@@ -755,12 +763,14 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       typeBarHeight: typeArea && centerIsType ? typeBarHeight : undefined,
       typeFace: typeArea && centerIsType ? typeFace : undefined,
       typeTrack: typeArea && centerIsType ? typeTrack : undefined,
+      typeColor: typeArea && centerIsType ? typeColor : undefined,
       nextTypeCopy: typeArea && nextCenterIsType ? nextTypeCopy : undefined,
       nextTypeFontSize: typeArea && nextCenterIsType ? nextTypeFontSize : undefined,
       nextTypeBarWidth: typeArea && nextCenterIsType ? nextTypeBarWidth : undefined,
       nextTypeBarHeight: typeArea && nextCenterIsType ? nextTypeBarHeight : undefined,
       nextTypeFace: typeArea && nextCenterIsType ? nextTypeFace : undefined,
       nextTypeTrack: typeArea && nextCenterIsType ? nextTypeTrack : undefined,
+      nextTypeColor: typeArea && nextCenterIsType ? nextTypeColor : undefined,
       capturedAt: new Date().toISOString(),
       field: { ...ditherSettings },
       buildingBlocks: (stamp.ramp ?? []).map(cell => ({
@@ -782,6 +792,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: typeArea && centerIsType ? typeBarHeight : undefined,
           typeFace: typeArea && centerIsType ? typeFace : undefined,
           typeTrack: typeArea && centerIsType ? typeTrack : undefined,
+          typeColor: typeArea && centerIsType ? typeColor : undefined,
           shadowWidth: !typeArea ? shadowWidth : undefined,
           shadowHeight: !typeArea ? shadowHeight : undefined,
         },
@@ -796,6 +807,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: step.typeBarHeight,
           typeFace: step.typeFace,
           typeTrack: step.typeTrack,
+          typeColor: step.typeColor,
           shadowWidth: step.shadowWidth,
           shadowHeight: step.shadowHeight,
         })),
@@ -812,6 +824,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: typeArea && nextCenterIsType ? nextTypeBarHeight : undefined,
           typeFace: typeArea && nextCenterIsType ? nextTypeFace : undefined,
           typeTrack: typeArea && nextCenterIsType ? nextTypeTrack : undefined,
+          typeColor: typeArea && nextCenterIsType ? nextTypeColor : undefined,
           shadowWidth: !typeArea ? nextShadowWidth : undefined,
           shadowHeight: !typeArea ? nextShadowHeight : undefined,
         },
@@ -826,6 +839,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
           typeBarHeight: step.typeBarHeight,
           typeFace: step.typeFace,
           typeTrack: step.typeTrack,
+          typeColor: step.typeColor,
           shadowWidth: step.shadowWidth,
           shadowHeight: step.shadowHeight,
         })),
@@ -868,12 +882,14 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
         typeBarHeight?: number;
         typeFace?: TypeFace;
         typeTrack?: number;
+        typeColor?: string;
         nextTypeCopy?: string;
         nextTypeFontSize?: number;
         nextTypeBarWidth?: number;
         nextTypeBarHeight?: number;
         nextTypeFace?: TypeFace;
         nextTypeTrack?: number;
+        nextTypeColor?: string;
       };
       if (setup.version !== 1) throw new Error("This setup version is not supported.");
 
@@ -885,12 +901,14 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       const centerBarH = setup.typeBarHeight ?? centerImage?.typeBarHeight;
       const centerFace = centerImage?.typeFace ?? setup.typeFace;
       const centerTrack = centerImage?.typeTrack ?? setup.typeTrack;
+      const centerColor = centerImage?.typeColor ?? setup.typeColor;
       const act2Copy = setup.nextTypeCopy ?? nextCenterImage?.typeCopy;
       const act2Font = setup.nextTypeFontSize ?? nextCenterImage?.typeFontSize;
       const act2BarW = setup.nextTypeBarWidth ?? nextCenterImage?.typeBarWidth;
       const act2BarH = setup.nextTypeBarHeight ?? nextCenterImage?.typeBarHeight;
       const act2Face = nextCenterImage?.typeFace ?? setup.nextTypeFace;
       const act2Track = nextCenterImage?.typeTrack ?? setup.nextTypeTrack;
+      const act2Color = nextCenterImage?.typeColor ?? setup.nextTypeColor;
       if (typeArea && typeof centerCopy === "string") {
         setCenterIsType(true);
         setTypeCopy(centerCopy);
@@ -908,8 +926,10 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       if (typeArea && typeof act2Font === "number") setNextTypeFontSize(clampTypeFont(act2Font));
       if (typeArea) setTypeFace(clampTypeFace(centerFace));
       if (typeArea && typeof centerTrack === "number") setTypeTrack(clampTypeTrack(centerTrack));
+      if (typeArea) setTypeColor(clampTypeColor(centerColor));
       if (typeArea) setNextTypeFace(clampTypeFace(act2Face));
       if (typeArea && typeof act2Track === "number") setNextTypeTrack(clampTypeTrack(act2Track));
+      if (typeArea) setNextTypeColor(clampTypeColor(act2Color));
 
       if (setup.field && typeof setup.field === "object") {
         const restored = { ...ditherSettings };
@@ -972,6 +992,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
             typeBarHeight: typeof image.typeBarHeight === "number" ? clampTypeBar(image.typeBarHeight, TYPE_AREA_BAR_HEIGHT_MAX) : step.typeBarHeight,
             typeFace: image.typeFace ? clampTypeFace(image.typeFace) : step.typeFace,
             typeTrack: typeof image.typeTrack === "number" ? clampTypeTrack(image.typeTrack) : step.typeTrack,
+            typeColor: image.typeColor ? clampTypeColor(image.typeColor) : step.typeColor,
             shadowWidth: typeof image.shadowWidth === "number" ? clampShadowSize(image.shadowWidth) : step.shadowWidth,
             shadowHeight: typeof image.shadowHeight === "number" ? clampShadowSize(image.shadowHeight) : step.shadowHeight,
           };
@@ -1132,6 +1153,21 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     if (act === 2) setNextStepImages(apply);
     else setStepImages(apply);
   };
+  const writeTypeColor = (color: string) => {
+    const next = clampTypeColor(color);
+    const { act, slot } = typeEdit;
+    if (slot === "center") {
+      if (act === 2) { setNextCenterIsType(true); setNextTypeColor(next); }
+      else { setCenterIsType(true); setTypeColor(next); }
+      return;
+    }
+    const apply = (items: StepOverlaySpec[]) => items.map((step, index) => {
+      if (index !== slot || typeof step.typeCopy !== "string") return step;
+      return { ...step, typeColor: next, image: renderTypeBlock(step.typeCopy, step.typeFontSize ?? 36, step.size, stagePx(), typeStyleOf({ ...step, typeColor: next })) };
+    });
+    if (act === 2) setNextStepImages(apply);
+    else setStepImages(apply);
+  };
   const addTypeSurround = (act: 1 | 2) => {
     const current = act === 2 ? nextStepsRef.current : stepsRef.current;
     const slots = act === 2
@@ -1151,14 +1187,65 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
     setNextTypeBarHeight(TYPE_AREA_ACT2_BAR_HEIGHT);
     setNextTypeFace(TYPE_AREA_FACE);
     setNextTypeTrack(TYPE_AREA_TRACK);
+    setNextTypeColor(TYPE_AREA_COLOR);
     nextImageSizeRef.current = TYPE_AREA_FIELD;
     setNextImageSize(TYPE_AREA_FIELD);
     selectTypeSlot(2, "center");
   };
+  const buildFieldExport = (): FieldExportDraw | null => {
+    if (!canvas.current || seed.current === null) return null;
+    const bounds = canvas.current.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return null;
+    return {
+      seed: seed.current,
+      time: 0,
+      dither: stampRef.current,
+      ditherSettings: ditherSettingsRef.current,
+      figure: figureRef.current ?? undefined,
+      steps: stepsRef.current,
+      stepDither: stepStampRef.current,
+      neckDither: neckStampRef.current,
+      figureMorph: pushMorph,
+      figurePosition: figurePosition.current,
+      figureSize: mainImageSizeRef.current,
+      sequence: sequenceStudio ? {
+        ...sequence,
+        playing: false,
+        preview: sequencePreviewRef.current,
+        nextFigure: nextFigureRef.current ?? undefined,
+        nextSteps: nextStepsRef.current,
+        nextFigureSize: nextImageSizeRef.current,
+        typeBarWidth,
+        typeBarHeight,
+        nextTypeBarWidth,
+        nextTypeBarHeight,
+        shadowWidth,
+        shadowHeight,
+        nextShadowWidth,
+        nextShadowHeight,
+      } : null,
+    };
+  };
+  const downloadFieldShape = async (format: "png" | "svg") => {
+    const bounds = canvas.current?.getBoundingClientRect();
+    const draw = buildFieldExport();
+    if (!bounds?.width || !bounds?.height || !draw) {
+      setExportStatus("Export failed.");
+      return;
+    }
+    try {
+      if (format === "png") await exportFieldPng(bounds.width, bounds.height, draw);
+      else exportFieldSvg(bounds.width, bounds.height, draw);
+      setExportStatus(format === "png" ? "PNG downloaded." : "SVG downloaded.");
+      window.setTimeout(() => setExportStatus(""), 1800);
+    } catch {
+      setExportStatus("Export failed.");
+    }
+  };
   const editingType = typeEdit.slot === "center"
     ? typeEdit.act === 2
-      ? { copy: nextTypeCopy, fontSize: nextTypeFontSize, barWidth: nextTypeBarWidth, barHeight: nextTypeBarHeight, face: nextTypeFace, track: nextTypeTrack, title: "Act 2 · Center" }
-      : { copy: typeCopy, fontSize: typeFontSize, barWidth: typeBarWidth, barHeight: typeBarHeight, face: typeFace, track: typeTrack, title: "Act 1 · Center" }
+      ? { copy: nextTypeCopy, fontSize: nextTypeFontSize, barWidth: nextTypeBarWidth, barHeight: nextTypeBarHeight, face: nextTypeFace, track: nextTypeTrack, color: nextTypeColor, title: "Act 2 · Center" }
+      : { copy: typeCopy, fontSize: typeFontSize, barWidth: typeBarWidth, barHeight: typeBarHeight, face: typeFace, track: typeTrack, color: typeColor, title: "Act 1 · Center" }
     : {
       copy: ((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.typeCopy ?? ""),
       fontSize: ((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.typeFontSize ?? 36),
@@ -1166,6 +1253,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
       barHeight: ((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.typeBarHeight ?? TYPE_AREA_BAR_HEIGHT),
       face: clampTypeFace((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.typeFace),
       track: clampTypeTrack((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.typeTrack ?? TYPE_AREA_TRACK),
+      color: clampTypeColor((typeEdit.act === 2 ? nextStepImages : stepImages)[typeEdit.slot]?.typeColor),
       title: `Act ${typeEdit.act} · Surround ${typeEdit.slot + 1}`,
     };
   const editingShadow = typeEdit.slot === "center"
@@ -1181,7 +1269,7 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
   return <main className={styles.workspace}>
     <header className={styles.header}>
       <StudyNav className={styles.navigation} />
-      <h1 className={styles.title}>{mediaPair ? "Innate OS · Combined media" : imageMerge ? "Dithered image · Merge" : ditherImage ? "Dithered image" : typeArea ? "Innate OS · Text area" : sequenceStudio ? "Innate OS · Morph sequence" : editableImages ? "Innate OS · Morph images" : gridOnly ? "Grid cells" : pushMorph ? "Innate OS · Morph" : figure ? "Innate OS" : dither ? "Cell system" : neurons ? "Connected agents" : multiple ? "Four agents" : rectangular ? "Rectangle field" : "Circle field"}</h1>
+      <h1 className={styles.title}>{mediaPair ? "Innate OS · Combined media" : imageMerge ? "Dithered image · Merge" : ditherImage ? "Dithered image" : typeAreaExport ? "Innate OS · Text Area_export" : typeArea ? "Innate OS · Text area" : sequenceStudio ? "Innate OS · Morph sequence" : editableImages ? "Innate OS · Morph images" : gridOnly ? "Grid cells" : pushMorph ? "Innate OS · Morph" : figure ? "Innate OS" : dither ? "Cell system" : neurons ? "Connected agents" : multiple ? "Four agents" : rectangular ? "Rectangle field" : "Circle field"}</h1>
     </header>
     <section className={`${styles.stage} ${neurons ? styles.neuralStage : ""}`} aria-label={gridOnly ? "Draggable grid cells" : dither ? "Dithered cell field" : rectangular ? "Interactive rectangular density field" : "One generative circle-grid pattern"}>
       <canvas ref={canvas} className={`${styles.canvas} ${mediaPair ? styles.mediaCanvas : ""} ${dragging ? styles.dragging : ""}`} role="img"
@@ -1237,11 +1325,22 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
         </div>}
         {editableImages && <div className={styles.imageControls}>
           <p className={styles.imageControlHeading}>{typeArea ? "Type area" : "Draggable images"}</p>
-          <p className={styles.imageControlNote}>{typeArea
+          <p className={styles.imageControlNote}>{typeAreaExport
+            ? "Edit type like 10_text area, then download the dithered shape only — transparent PNG or vector SVG, no LED grid."
+            : typeArea
             ? "Select a type slot in the sequence bar to edit copy, size, and that block’s line width and height."
             : sequenceStudio
               ? "Select a part in the sequence bar to edit that island’s shadow width and height. Copy Setup records the sizes with positions."
               : "Drag any image on the canvas. Copy Setup records parameters, block tones, and image positions."}</p>
+          {typeAreaExport && <div className={styles.exportActions}>
+            <button className={styles.exportButton} type="button" onClick={() => { void downloadFieldShape("png"); }}>
+              Download PNG
+            </button>
+            <button className={styles.exportButton} type="button" onClick={() => downloadFieldShape("svg")}>
+              Download SVG
+            </button>
+            {exportStatus && <p aria-live="polite">{exportStatus}</p>}
+          </div>}
           {typeArea && <button className={styles.imageReset} type="button" onClick={restoreDefaultFigure}>
             Restore type
           </button>}
@@ -1361,6 +1460,13 @@ export function DotSystem({ rectangular = false, multiple = false, neurons = fal
                 {face}
               </button>)}
           </div>
+          <label className={styles.typeColor}>
+            <span>Text color</span>
+            <input type="color" value={/^#[0-9a-f]{6}$/i.test(editingType.color) ? editingType.color : TYPE_AREA_COLOR}
+              aria-label="Type text color" onChange={event => writeTypeColor(event.target.value)} />
+            <input type="text" spellCheck={false} value={editingType.color} aria-label="Type text hex"
+              onChange={event => writeTypeColor(event.target.value)} />
+          </label>
           <div className={styles.typeSliders}>
             <label className={styles.typeSize}>
               <span>Text size</span>
